@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bni-red: #CF0A2C;
+  --color-bni-red-dark: #A80823;
+  --color-bni-red-light: #E8334F;
+  --color-bni-gray: #58595B;
+  --color-bni-gray-light: #F5F5F5;
+}
