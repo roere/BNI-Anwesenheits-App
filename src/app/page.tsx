@@ -31,6 +31,7 @@ export default function CheckInPage() {
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [showGuestModal, setShowGuestModal] = useState(false);
   const [signingGuest, setSigningGuest] = useState<Guest | null>(null);
+  const [signingGuestAttendanceId, setSigningGuestAttendanceId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [kioskMode, setKioskMode] = useState<KioskMode>("loading");
   const [resetMemberId, setResetMemberId] = useState<string | null>(null);
@@ -230,26 +231,51 @@ export default function CheckInPage() {
 
     const needsBreakfast = signingGuest.total_visits >= 1;
 
-    await kioskFetch("/api/attendance/guest", {
-      method: "POST",
-      body: JSON.stringify({
-        meeting_id: meeting.id,
-        guest_id: signingGuest.id,
-        signature_data: signatureData,
-        breakfast_paid: needsBreakfast,
-        disclaimer_accepted: true,
-        disclaimer_accepted_at: new Date().toISOString(),
-      }),
-    });
+    if (signingGuestAttendanceId) {
+      // Vorausgefüllter Gast: bestehendes Record updaten
+      await kioskFetch("/api/attendance/guest", {
+        method: "PATCH",
+        body: JSON.stringify({
+          attendance_id: signingGuestAttendanceId,
+          signature_data: signatureData,
+          breakfast_paid: needsBreakfast,
+          disclaimer_accepted: true,
+          disclaimer_accepted_at: new Date().toISOString(),
+        }),
+      });
+    } else {
+      // Walk-in Gast: neues Record anlegen
+      await kioskFetch("/api/attendance/guest", {
+        method: "POST",
+        body: JSON.stringify({
+          meeting_id: meeting.id,
+          guest_id: signingGuest.id,
+          signature_data: signatureData,
+          breakfast_paid: needsBreakfast,
+          disclaimer_accepted: true,
+          disclaimer_accepted_at: new Date().toISOString(),
+        }),
+      });
+    }
 
     setShowSignatureModal(false);
     setSigningGuest(null);
+    setSigningGuestAttendanceId(null);
     loadData();
+  };
+
+  const handlePendingGuestClick = (ga: GuestAttendance & { guest: Guest }) => {
+    if (!canWrite) return;
+    setSigningGuest(ga.guest);
+    setSigningGuestAttendanceId(ga.id);
+    setSelectedMember(null);
+    setShowSignatureModal(true);
   };
 
   const handleGuestAdded = (guest: Guest) => {
     setShowGuestModal(false);
     setSigningGuest(guest);
+    setSigningGuestAttendanceId(null);
     setSelectedMember(null);
     setShowSignatureModal(true);
   };
@@ -395,7 +421,7 @@ export default function CheckInPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-bni-gray">
-              Gäste ({guestAttendances.length})
+              Gäste ({guestAttendances.filter((ga) => ga.signature_data).length}/{guestAttendances.length})
             </h2>
             {canWrite && (
               <button
@@ -408,21 +434,45 @@ export default function CheckInPage() {
           </div>
           {guestAttendances.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
-              {guestAttendances.map((ga) => (
-                <div
-                  key={ga.id}
-                  className="p-3 sm:p-4 rounded-xl border-2 bg-green-50 border-green-500 text-green-800 overflow-hidden"
-                >
-                  <p className="font-bold text-sm sm:text-lg truncate">{ga.guest?.name}</p>
-                  {ga.guest?.firma && (
-                    <p className="text-xs sm:text-sm opacity-70 truncate">{ga.guest.firma}</p>
-                  )}
-                  <p className="text-xs sm:text-sm font-medium mt-1 truncate">
-                    Besuch #{ga.guest?.total_visits}
-                    {ga.breakfast_paid && " | Frühstück ✓"}
-                  </p>
-                </div>
-              ))}
+              {/* Ausstehende Gäste (vorausgefüllt, noch nicht eingecheckt) */}
+              {guestAttendances
+                .filter((ga) => !ga.signature_data)
+                .map((ga) => (
+                  <button
+                    key={ga.id}
+                    onClick={() => handlePendingGuestClick(ga)}
+                    disabled={!canWrite}
+                    className={`p-3 sm:p-4 rounded-xl border-2 bg-gray-100 border-gray-300 text-bni-gray text-left overflow-hidden transition-all ${
+                      canWrite ? "active:scale-95" : "cursor-default"
+                    }`}
+                  >
+                    <p className="font-bold text-sm sm:text-lg truncate">{ga.guest?.name}</p>
+                    {ga.guest?.firma && (
+                      <p className="text-xs sm:text-sm opacity-70 truncate">{ga.guest.firma}</p>
+                    )}
+                    <p className="text-xs sm:text-sm font-medium mt-1 text-gray-500">
+                      Noch nicht eingecheckt
+                    </p>
+                  </button>
+                ))}
+              {/* Eingecheckte Gäste */}
+              {guestAttendances
+                .filter((ga) => ga.signature_data)
+                .map((ga) => (
+                  <div
+                    key={ga.id}
+                    className="p-3 sm:p-4 rounded-xl border-2 bg-green-50 border-green-500 text-green-800 overflow-hidden"
+                  >
+                    <p className="font-bold text-sm sm:text-lg truncate">{ga.guest?.name}</p>
+                    {ga.guest?.firma && (
+                      <p className="text-xs sm:text-sm opacity-70 truncate">{ga.guest.firma}</p>
+                    )}
+                    <p className="text-xs sm:text-sm font-medium mt-1 truncate">
+                      Besuch #{ga.guest?.total_visits}
+                      {ga.breakfast_paid && " | Frühstück ✓"}
+                    </p>
+                  </div>
+                ))}
             </div>
           )}
         </section>
@@ -468,6 +518,7 @@ export default function CheckInPage() {
             setShowSignatureModal(false);
             setSelectedMember(null);
             setSigningGuest(null);
+            setSigningGuestAttendanceId(null);
           }}
         />
       )}
