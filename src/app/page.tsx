@@ -343,6 +343,26 @@ export default function CheckInPage() {
       </header>
 
       <main className="max-w-6xl mx-auto p-6">
+        {/* Tutorial */}
+        {canWrite && (
+          <div className="mb-6 p-4 rounded-xl bg-white border-2 border-gray-200 flex items-center gap-4 text-sm text-bni-gray">
+            <span className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">1</span>
+              Tippe auf deinen Namen
+            </span>
+            <span className="text-gray-300">&#8594;</span>
+            <span className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">2</span>
+              Status auswählen
+            </span>
+            <span className="text-gray-300">&#8594;</span>
+            <span className="flex items-center gap-2">
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">3</span>
+              Unterschreiben &amp; bestätigen
+            </span>
+          </div>
+        )}
+
         {/* Mitglieder-Grid */}
         <section className="mb-8">
           <h2 className="text-xl font-bold text-bni-gray mb-4">Mitglieder</h2>
