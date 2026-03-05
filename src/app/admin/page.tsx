@@ -75,7 +75,7 @@ export default function AdminPage() {
       <header className="bg-bni-red text-white py-4 px-6 shadow-lg">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">BNI Admin</h1>
+            <h1 className="text-2xl font-bold">BNI Königsforst Admin</h1>
           </div>
           <a href="/" className="text-white opacity-80 hover:opacity-100">
             ← Check-in
@@ -447,6 +447,140 @@ function MeetingsTab() {
   const [attendances, setAttendances] = useState<(MemberAttendance & { member: Member })[]>([]);
   const [guestAttendances, setGuestAttendances] = useState<(GuestAttendance & { guest: Guest })[]>([]);
 
+  const exportPDF = async () => {
+    const meeting = meetings.find((m) => m.id === selectedMeeting);
+    if (!meeting) return;
+
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+
+    const dateStr = new Date(meeting.date + "T00:00:00").toLocaleDateString("de-DE", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+
+    const present = attendances.filter((a) => a.status === "PRESENT");
+    const represented = attendances.filter((a) => a.status === "REPRESENTED");
+    const absent = attendances.filter((a) => a.status === "ABSENT");
+
+    // Header
+    doc.setFontSize(20);
+    doc.text("BNI Königsforst", 14, 20);
+    doc.setFontSize(14);
+    doc.text("Anwesenheitsliste", 14, 28);
+    doc.setFontSize(11);
+    doc.setTextColor(100);
+    doc.text(dateStr, 14, 36);
+
+    // Zusammenfassung
+    doc.setFontSize(10);
+    doc.text(
+      `Anwesend: ${present.length}  |  Vertreten: ${represented.length}  |  Abwesend: ${absent.length}  |  Gäste: ${guestAttendances.length}`,
+      14,
+      44
+    );
+
+    // Mitglieder-Tabelle
+    let y = 56;
+    doc.setTextColor(0);
+    doc.setFontSize(12);
+    doc.text("Mitglieder", 14, y);
+    y += 4;
+
+    // Tabellenkopf
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text("Name", 14, y + 6);
+    doc.text("Status", 110, y + 6);
+    doc.text("Vertretung", 150, y + 6);
+    y += 8;
+    doc.setDrawColor(200);
+    doc.line(14, y, 196, y);
+    y += 4;
+
+    doc.setTextColor(0);
+    doc.setFontSize(10);
+
+    const sortedAttendances = [...attendances].sort((a, b) =>
+      (a.member?.name || "").localeCompare(b.member?.name || "")
+    );
+
+    for (const a of sortedAttendances) {
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+
+      const statusText =
+        a.status === "PRESENT"
+          ? "Anwesend"
+          : a.status === "REPRESENTED"
+          ? "Vertreten"
+          : "Abwesend";
+
+      doc.text(a.member?.name || "", 14, y);
+      doc.text(statusText, 110, y);
+      if (a.represented_by) {
+        doc.text(a.represented_by, 150, y);
+      }
+      y += 6;
+    }
+
+    // Gäste-Tabelle
+    if (guestAttendances.length > 0) {
+      y += 6;
+      if (y > 260) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFontSize(12);
+      doc.text("Gäste", 14, y);
+      y += 4;
+
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      doc.text("Name", 14, y + 6);
+      doc.text("Firma", 110, y + 6);
+      y += 8;
+      doc.line(14, y, 196, y);
+      y += 4;
+
+      doc.setTextColor(0);
+      doc.setFontSize(10);
+
+      for (const ga of guestAttendances) {
+        if (y > 270) {
+          doc.addPage();
+          y = 20;
+        }
+        doc.text(ga.guest?.name || "", 14, y);
+        if (ga.guest?.firma) {
+          doc.text(ga.guest.firma, 110, y);
+        }
+        y += 6;
+      }
+    }
+
+    // Footer
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text(
+        `Erstellt am ${new Date().toLocaleDateString("de-DE")} um ${new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}`,
+        14,
+        287
+      );
+      doc.text(`Seite ${i} / ${pageCount}`, 180, 287);
+    }
+
+    doc.save(`BNI_Anwesenheit_${meeting.date}.pdf`);
+  };
+
   const loadMeetings = useCallback(async () => {
     const { data: meetingsData } = await supabase
       .from("meetings")
@@ -523,7 +657,15 @@ function MeetingsTab() {
         {/* Meeting-Details */}
         {selectedMeeting && (
           <div className="bg-white rounded-xl p-4">
-            <h3 className="font-bold text-lg mb-3">Anwesenheit</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-lg">Anwesenheit</h3>
+              <button
+                onClick={exportPDF}
+                className="bg-bni-red text-white px-4 py-2 rounded-xl font-medium text-sm active:scale-95 transition-all"
+              >
+                PDF exportieren
+              </button>
+            </div>
             <div className="space-y-2">
               {attendances.map((a) => (
                 <div

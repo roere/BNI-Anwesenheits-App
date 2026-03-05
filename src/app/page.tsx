@@ -350,7 +350,7 @@ export default function CheckInPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <div className="shrink-0">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">BNI</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">BNI Königsforst</h1>
               <p className="text-xs sm:text-sm opacity-90">Anwesenheit</p>
             </div>
             {kioskMode === "kiosk" && (
