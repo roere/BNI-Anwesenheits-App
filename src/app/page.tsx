@@ -320,44 +320,44 @@ export default function CheckInPage() {
       )}
 
       {/* Header */}
-      <header className="bg-bni-red text-white py-4 px-6 shadow-lg">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight">BNI</h1>
-              <p className="text-sm opacity-90">Anwesenheitserfassung</p>
+      <header className="bg-bni-red text-white py-3 px-4 sm:py-4 sm:px-6 shadow-lg">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="shrink-0">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">BNI</h1>
+              <p className="text-xs sm:text-sm opacity-90">Anwesenheit</p>
             </div>
             {kioskMode === "kiosk" && (
-              <span className="bg-white/20 text-white text-xs font-bold px-2 py-1 rounded-lg">
+              <span className="bg-white/20 text-white text-xs font-bold px-2 py-1 rounded-lg shrink-0">
                 KIOSK
               </span>
             )}
           </div>
-          <div className="text-right">
-            <p className="text-lg font-semibold">{todayFormatted}</p>
-            <p className="text-sm opacity-90">
+          <div className="text-right shrink-0">
+            <p className="text-sm sm:text-lg font-semibold">{todayFormatted}</p>
+            <p className="text-xs sm:text-sm opacity-90">
               {attendances.length} / {members.length} erfasst
             </p>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-6">
+      <main className="max-w-6xl mx-auto p-3 sm:p-6">
         {/* Tutorial */}
         {canWrite && (
-          <div className="mb-6 p-4 rounded-xl bg-white border-2 border-gray-200 flex items-center gap-4 text-sm text-bni-gray">
+          <div className="mb-6 p-3 sm:p-4 rounded-xl bg-white border-2 border-gray-200 flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 text-xs sm:text-sm text-bni-gray">
             <span className="flex items-center gap-2">
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">1</span>
+              <span className="flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">1</span>
               Tippe auf deinen Namen
             </span>
-            <span className="text-gray-300">&#8594;</span>
+            <span className="text-gray-300 hidden sm:inline">&#8594;</span>
             <span className="flex items-center gap-2">
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">2</span>
+              <span className="flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">2</span>
               Status auswählen
             </span>
-            <span className="text-gray-300">&#8594;</span>
+            <span className="text-gray-300 hidden sm:inline">&#8594;</span>
             <span className="flex items-center gap-2">
-              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">3</span>
+              <span className="flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-bni-red text-white text-xs font-bold shrink-0">3</span>
               Unterschreiben &amp; bestätigen
             </span>
           </div>
@@ -366,23 +366,23 @@ export default function CheckInPage() {
         {/* Mitglieder-Grid */}
         <section className="mb-8">
           <h2 className="text-xl font-bold text-bni-gray mb-4">Mitglieder</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
             {members.map((member) => (
               <button
                 key={member.id}
                 onClick={() => handleMemberClick(member)}
                 onDoubleClick={() => handleResetRequest(member.id)}
                 disabled={!canWrite}
-                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                className={`p-3 sm:p-4 rounded-xl border-2 text-left transition-all overflow-hidden ${
                   canWrite ? "active:scale-95" : "cursor-default"
                 } ${getStatusColor(member.id)}`}
               >
-                <p className="font-bold text-lg">{member.name}</p>
+                <p className="font-bold text-sm sm:text-lg truncate">{member.name}</p>
                 {member.fachgebiet && (
-                  <p className="text-sm opacity-70">{member.fachgebiet}</p>
+                  <p className="text-xs sm:text-sm opacity-70 truncate">{member.fachgebiet}</p>
                 )}
                 {getAttendance(member.id) && (
-                  <p className="text-sm font-medium mt-1">
+                  <p className="text-xs sm:text-sm font-medium mt-1 truncate">
                     {getStatusLabel(member.id)}
                   </p>
                 )}
@@ -400,24 +400,24 @@ export default function CheckInPage() {
             {canWrite && (
               <button
                 onClick={() => setShowGuestModal(true)}
-                className="bg-bni-red text-white px-6 py-3 rounded-xl font-semibold text-lg active:scale-95 transition-all"
+                className="bg-bni-red text-white px-4 py-2 sm:px-6 sm:py-3 rounded-xl font-semibold text-sm sm:text-lg active:scale-95 transition-all shrink-0"
               >
                 + Gast hinzufügen
               </button>
             )}
           </div>
           {guestAttendances.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
               {guestAttendances.map((ga) => (
                 <div
                   key={ga.id}
-                  className="p-4 rounded-xl border-2 bg-green-50 border-green-500 text-green-800"
+                  className="p-3 sm:p-4 rounded-xl border-2 bg-green-50 border-green-500 text-green-800 overflow-hidden"
                 >
-                  <p className="font-bold text-lg">{ga.guest?.name}</p>
+                  <p className="font-bold text-sm sm:text-lg truncate">{ga.guest?.name}</p>
                   {ga.guest?.firma && (
-                    <p className="text-sm opacity-70">{ga.guest.firma}</p>
+                    <p className="text-xs sm:text-sm opacity-70 truncate">{ga.guest.firma}</p>
                   )}
-                  <p className="text-sm font-medium mt-1">
+                  <p className="text-xs sm:text-sm font-medium mt-1 truncate">
                     Besuch #{ga.guest?.total_visits}
                     {ga.breakfast_paid && " | Frühstück ✓"}
                   </p>
