@@ -11,7 +11,7 @@ import type {
   GuestAttendance,
 } from "@/lib/types";
 
-type Tab = "members" | "guests" | "meetings" | "stats" | "settings";
+type Tab = "members" | "guests" | "meetings" | "stats" | "settings" | "kiosk";
 
 export default function AdminPage() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -92,6 +92,7 @@ export default function AdminPage() {
             { id: "meetings" as Tab, label: "Meetings" },
             { id: "stats" as Tab, label: "Statistiken" },
             { id: "settings" as Tab, label: "Einstellungen" },
+            { id: "kiosk" as Tab, label: "Kiosk-Modus" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -114,6 +115,7 @@ export default function AdminPage() {
         {activeTab === "meetings" && <MeetingsTab />}
         {activeTab === "stats" && <StatsTab />}
         {activeTab === "settings" && <SettingsTab pin={storedPin} />}
+        {activeTab === "kiosk" && <KioskTab pin={storedPin} />}
       </div>
     </div>
   );
@@ -748,6 +750,146 @@ function SettingsTab({ pin }: { pin: string }) {
         >
           {saved ? "Gespeichert ✓" : "Speichern"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== Kiosk-Modus-Tab ====================
+function KioskTab({ pin }: { pin: string }) {
+  const [kioskActive, setKioskActive] = useState(false);
+  const [tokenPreview, setTokenPreview] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [justActivated, setJustActivated] = useState(false);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const data = await adminFetch<{ active: boolean; tokenPreview?: string }>(
+        "/api/kiosk/status",
+        pin
+      );
+      setKioskActive(data.active);
+      setTokenPreview(data.tokenPreview || "");
+    } catch {
+      // Kiosk-Modus noch nicht konfiguriert
+    }
+    setLoading(false);
+  }, [pin]);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  const handleActivate = async () => {
+    try {
+      const data = await adminFetch<{ token: string; message: string }>(
+        "/api/kiosk/activate",
+        pin,
+        { method: "POST" }
+      );
+      localStorage.setItem("bni_kiosk_token", data.token);
+      setKioskActive(true);
+      setJustActivated(true);
+      loadStatus();
+    } catch {
+      // Fehler beim Aktivieren
+    }
+  };
+
+  const handleDeactivate = async () => {
+    try {
+      await adminFetch("/api/kiosk/deactivate", pin, { method: "POST" });
+      localStorage.removeItem("bni_kiosk_token");
+      setKioskActive(false);
+      setJustActivated(false);
+      loadStatus();
+    } catch {
+      // Fehler beim Deaktivieren
+    }
+  };
+
+  const handleRegenerate = async () => {
+    await handleActivate();
+  };
+
+  if (loading) {
+    return <div className="text-bni-gray">Laden...</div>;
+  }
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold mb-4">Kiosk-Modus</h2>
+
+      <div className="bg-white rounded-xl p-6 space-y-6">
+        {/* Status-Anzeige */}
+        <div className="flex items-center gap-4">
+          <div
+            className={`w-4 h-4 rounded-full ${
+              kioskActive ? "bg-green-500" : "bg-gray-400"
+            }`}
+          />
+          <span className="text-lg font-bold">
+            Kiosk-Modus: {kioskActive ? "AKTIV" : "INAKTIV"}
+          </span>
+        </div>
+
+        {justActivated && (
+          <div className="p-4 rounded-xl bg-green-50 border-2 border-green-400">
+            <p className="font-semibold text-green-800">
+              Kiosk-Modus wurde aktiviert. Dieses Gerät ist nun als Kiosk autorisiert.
+            </p>
+          </div>
+        )}
+
+        {!kioskActive ? (
+          <>
+            <div className="p-4 rounded-xl bg-blue-50 border-2 border-blue-300">
+              <p className="text-blue-800">
+                Im Kiosk-Modus kann nur dieses Gerät Anwesenheit erfassen.
+                Alle anderen Geräte sehen eine Nur-Lese-Ansicht.
+              </p>
+              <p className="text-blue-800 mt-2 text-sm">
+                Wenn der Kiosk-Modus deaktiviert ist, können alle Geräte Anwesenheit erfassen.
+              </p>
+            </div>
+            <button
+              onClick={handleActivate}
+              className="w-full p-4 rounded-xl bg-bni-red text-white font-bold text-lg active:scale-95 transition-all"
+            >
+              Kiosk-Modus aktivieren
+            </button>
+          </>
+        ) : (
+          <>
+            {tokenPreview && (
+              <div className="p-4 rounded-xl bg-gray-50 border-2 border-gray-300">
+                <p className="text-sm text-bni-gray">
+                  Autorisiertes Gerät-Token: <code className="font-mono">{tokenPreview}</code>
+                </p>
+              </div>
+            )}
+            <div className="p-4 rounded-xl bg-yellow-50 border-2 border-yellow-400">
+              <p className="text-yellow-800 text-sm">
+                Dieses Gerät ist als Kiosk autorisiert. Wenn Sie den Kiosk-Modus deaktivieren,
+                können alle Geräte Anwesenheit erfassen.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeactivate}
+                className="flex-1 p-4 rounded-xl bg-red-600 text-white font-bold active:scale-95 transition-all"
+              >
+                Kiosk-Modus deaktivieren
+              </button>
+              <button
+                onClick={handleRegenerate}
+                className="flex-1 p-4 rounded-xl bg-gray-600 text-white font-bold active:scale-95 transition-all"
+              >
+                Neuen Token generieren
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

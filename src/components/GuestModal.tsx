@@ -54,19 +54,21 @@ export default function GuestModal({ meetingId, onGuestAdded, onClose }: GuestMo
       return;
     }
 
-    // Neuen Gast erstellen
-    const { data: newGuest } = await supabase
-      .from("guests")
-      .insert({
-        name: name.trim(),
-        firma: firma.trim() || null,
-        total_visits: 0,
-      })
-      .select()
-      .single();
-
-    if (newGuest) {
-      onGuestAdded(newGuest);
+    // Neuen Gast über API erstellen
+    try {
+      const { kioskFetch } = await import("@/lib/kiosk-api");
+      const newGuest = await kioskFetch<Guest>("/api/attendance/guest/create", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          firma: firma.trim() || null,
+        }),
+      });
+      if (newGuest) {
+        onGuestAdded(newGuest);
+      }
+    } catch {
+      // Fehler beim Erstellen
     }
   };
 

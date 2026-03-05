@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { kioskFetch, getKioskToken } from "@/lib/kiosk-api";
 import type {
   Member,
   MemberAttendance,
@@ -9,10 +10,13 @@ import type {
   AttendanceStatus,
   Guest,
   GuestAttendance,
+  KioskValidateResponse,
 } from "@/lib/types";
 import StatusModal from "@/components/StatusModal";
 import SignatureModal from "@/components/SignatureModal";
 import GuestModal from "@/components/GuestModal";
+
+type KioskMode = "loading" | "kiosk" | "readonly" | "open";
 
 export default function CheckInPage() {
   const [members, setMembers] = useState<Member[]>([]);
@@ -28,29 +32,55 @@ export default function CheckInPage() {
   const [showGuestModal, setShowGuestModal] = useState(false);
   const [signingGuest, setSigningGuest] = useState<Guest | null>(null);
   const [loading, setLoading] = useState(true);
+  const [kioskMode, setKioskMode] = useState<KioskMode>("loading");
+  const [resetMemberId, setResetMemberId] = useState<string | null>(null);
+  const [resetPin, setResetPin] = useState("");
+  const [resetError, setResetError] = useState("");
+
+  const canWrite = kioskMode === "kiosk" || kioskMode === "open";
 
   const getTodayFriday = () => {
     const today = new Date();
     return today.toISOString().split("T")[0];
   };
 
+  const validateKiosk = useCallback(async () => {
+    try {
+      const token = getKioskToken();
+      const res = await fetch("/api/kiosk/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data: KioskValidateResponse = await res.json();
+      setKioskMode(data.mode);
+    } catch {
+      // Bei Fehler: Open Mode (Rückwärtskompatibilität)
+      setKioskMode("open");
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     const todayDate = getTodayFriday();
 
-    // Meeting für heute laden oder erstellen
+    // Meeting für heute laden
     let { data: meetingData } = await supabase
       .from("meetings")
       .select("*")
       .eq("date", todayDate)
       .single();
 
-    if (!meetingData) {
-      const { data: newMeeting } = await supabase
-        .from("meetings")
-        .insert({ date: todayDate })
-        .select()
-        .single();
-      meetingData = newMeeting;
+    // Meeting erstellen nur wenn schreibberechtigt
+    if (!meetingData && canWrite) {
+      try {
+        const newMeeting = await kioskFetch<Meeting>("/api/attendance/meeting", {
+          method: "POST",
+          body: JSON.stringify({ date: todayDate }),
+        });
+        meetingData = newMeeting;
+      } catch {
+        // Meeting konnte nicht erstellt werden
+      }
     }
 
     if (meetingData) {
@@ -92,11 +122,25 @@ export default function CheckInPage() {
     if (settingsData) setDisclaimerText(settingsData.value);
 
     setLoading(false);
-  }, []);
+  }, [canWrite]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    validateKiosk();
+  }, [validateKiosk]);
+
+  useEffect(() => {
+    if (kioskMode !== "loading") {
+      loadData();
+    }
+  }, [kioskMode, loadData]);
+
+  // Auto-Refresh im Read-Only-Modus
+  useEffect(() => {
+    if (kioskMode === "readonly") {
+      const interval = setInterval(loadData, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [kioskMode, loadData]);
 
   const getAttendance = (memberId: string) => {
     return attendances.find((a) => a.member_id === memberId);
@@ -129,8 +173,9 @@ export default function CheckInPage() {
   };
 
   const handleMemberClick = (member: Member) => {
+    if (!canWrite) return;
     const existing = getAttendance(member.id);
-    if (existing) return; // Bereits erfasst
+    if (existing) return;
     setSelectedMember(member);
     setShowStatusModal(true);
   };
@@ -144,12 +189,15 @@ export default function CheckInPage() {
       return;
     }
 
-    // Vertreten oder Abwesend: direkt speichern
-    await supabase.from("member_attendance").insert({
-      meeting_id: meeting.id,
-      member_id: selectedMember.id,
-      status,
-      represented_by: representedBy || null,
+    // Vertreten oder Abwesend: über API speichern
+    await kioskFetch("/api/attendance/member", {
+      method: "POST",
+      body: JSON.stringify({
+        meeting_id: meeting.id,
+        member_id: selectedMember.id,
+        status,
+        represented_by: representedBy || null,
+      }),
     });
 
     setShowStatusModal(false);
@@ -160,13 +208,16 @@ export default function CheckInPage() {
   const handleSignatureComplete = async (signatureData: string) => {
     if (!meeting || !selectedMember) return;
 
-    await supabase.from("member_attendance").insert({
-      meeting_id: meeting.id,
-      member_id: selectedMember.id,
-      status: "PRESENT",
-      signature_data: signatureData,
-      disclaimer_accepted: true,
-      disclaimer_accepted_at: new Date().toISOString(),
+    await kioskFetch("/api/attendance/member", {
+      method: "POST",
+      body: JSON.stringify({
+        meeting_id: meeting.id,
+        member_id: selectedMember.id,
+        status: "PRESENT",
+        signature_data: signatureData,
+        disclaimer_accepted: true,
+        disclaimer_accepted_at: new Date().toISOString(),
+      }),
     });
 
     setShowSignatureModal(false);
@@ -179,20 +230,17 @@ export default function CheckInPage() {
 
     const needsBreakfast = signingGuest.total_visits >= 1;
 
-    await supabase.from("guest_attendance").insert({
-      meeting_id: meeting.id,
-      guest_id: signingGuest.id,
-      signature_data: signatureData,
-      breakfast_paid: needsBreakfast,
-      disclaimer_accepted: true,
-      disclaimer_accepted_at: new Date().toISOString(),
+    await kioskFetch("/api/attendance/guest", {
+      method: "POST",
+      body: JSON.stringify({
+        meeting_id: meeting.id,
+        guest_id: signingGuest.id,
+        signature_data: signatureData,
+        breakfast_paid: needsBreakfast,
+        disclaimer_accepted: true,
+        disclaimer_accepted_at: new Date().toISOString(),
+      }),
     });
-
-    // Besuchszähler erhöhen
-    await supabase
-      .from("guests")
-      .update({ total_visits: signingGuest.total_visits + 1 })
-      .eq("id", signingGuest.id);
 
     setShowSignatureModal(false);
     setSigningGuest(null);
@@ -206,17 +254,46 @@ export default function CheckInPage() {
     setShowSignatureModal(true);
   };
 
-  const handleResetAttendance = async (memberId: string) => {
-    if (!meeting) return;
-    await supabase
-      .from("member_attendance")
-      .delete()
-      .eq("meeting_id", meeting.id)
-      .eq("member_id", memberId);
-    loadData();
+  const handleResetRequest = (memberId: string) => {
+    if (!meeting || !canWrite) return;
+    const existing = getAttendance(memberId);
+    if (!existing) return;
+    setResetMemberId(memberId);
+    setResetPin("");
+    setResetError("");
   };
 
-  if (loading) {
+  const handleResetConfirm = async () => {
+    if (!meeting || !resetMemberId || !resetPin) return;
+    try {
+      const token = getKioskToken();
+      const res = await fetch("/api/attendance/member", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-PIN": resetPin,
+          ...(token ? { "X-Kiosk-Token": token } : {}),
+        },
+        body: JSON.stringify({
+          meeting_id: meeting.id,
+          member_id: resetMemberId,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setResetError(data.error || "Fehler beim Zurücksetzen");
+        return;
+      }
+      setResetMemberId(null);
+      setResetPin("");
+      setResetError("");
+      loadData();
+    } catch {
+      setResetError("Fehler beim Zurücksetzen");
+    }
+  };
+
+  if (loading || kioskMode === "loading") {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-xl text-bni-gray">Laden...</div>
@@ -233,12 +310,28 @@ export default function CheckInPage() {
 
   return (
     <div className="min-h-screen bg-bni-gray-light">
+      {/* Read-Only Banner */}
+      {kioskMode === "readonly" && (
+        <div className="bg-yellow-100 border-b-2 border-yellow-400 px-6 py-3 text-center">
+          <p className="text-yellow-800 font-semibold">
+            Nur-Lese-Modus — Anwesenheit kann nur am Kiosk-Gerät erfasst werden
+          </p>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-bni-red text-white py-4 px-6 shadow-lg">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">BNI</h1>
-            <p className="text-sm opacity-90">Anwesenheitserfassung</p>
+          <div className="flex items-center gap-3">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">BNI</h1>
+              <p className="text-sm opacity-90">Anwesenheitserfassung</p>
+            </div>
+            {kioskMode === "kiosk" && (
+              <span className="bg-white/20 text-white text-xs font-bold px-2 py-1 rounded-lg">
+                KIOSK
+              </span>
+            )}
           </div>
           <div className="text-right">
             <p className="text-lg font-semibold">{todayFormatted}</p>
@@ -258,10 +351,11 @@ export default function CheckInPage() {
               <button
                 key={member.id}
                 onClick={() => handleMemberClick(member)}
-                onDoubleClick={() => handleResetAttendance(member.id)}
-                className={`p-4 rounded-xl border-2 text-left transition-all active:scale-95 ${getStatusColor(
-                  member.id
-                )}`}
+                onDoubleClick={() => handleResetRequest(member.id)}
+                disabled={!canWrite}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  canWrite ? "active:scale-95" : "cursor-default"
+                } ${getStatusColor(member.id)}`}
               >
                 <p className="font-bold text-lg">{member.name}</p>
                 {member.fachgebiet && (
@@ -283,12 +377,14 @@ export default function CheckInPage() {
             <h2 className="text-xl font-bold text-bni-gray">
               Gäste ({guestAttendances.length})
             </h2>
-            <button
-              onClick={() => setShowGuestModal(true)}
-              className="bg-bni-red text-white px-6 py-3 rounded-xl font-semibold text-lg active:scale-95 transition-all"
-            >
-              + Gast hinzufügen
-            </button>
+            {canWrite && (
+              <button
+                onClick={() => setShowGuestModal(true)}
+                className="bg-bni-red text-white px-6 py-3 rounded-xl font-semibold text-lg active:scale-95 transition-all"
+              >
+                + Gast hinzufügen
+              </button>
+            )}
           </div>
           {guestAttendances.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -362,6 +458,58 @@ export default function CheckInPage() {
           onGuestAdded={handleGuestAdded}
           onClose={() => setShowGuestModal(false)}
         />
+      )}
+
+      {/* PIN-Dialog zum Zurücksetzen */}
+      {resetMemberId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h2 className="text-xl font-bold text-bni-gray mb-2">
+              Anwesenheit zurücksetzen
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Bitte Admin-PIN eingeben, um die Anwesenheit von{" "}
+              <strong>
+                {members.find((m) => m.id === resetMemberId)?.name}
+              </strong>{" "}
+              zurückzusetzen.
+            </p>
+            <input
+              type="password"
+              value={resetPin}
+              onChange={(e) => {
+                setResetPin(e.target.value);
+                setResetError("");
+              }}
+              onKeyDown={(e) => e.key === "Enter" && handleResetConfirm()}
+              placeholder="Admin-PIN"
+              className="w-full p-4 rounded-xl border-2 border-gray-300 text-lg text-center tracking-widest focus:border-bni-red focus:outline-none mb-3"
+              autoFocus
+            />
+            {resetError && (
+              <p className="text-red-500 text-sm text-center mb-3">{resetError}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setResetMemberId(null);
+                  setResetPin("");
+                  setResetError("");
+                }}
+                className="flex-1 p-3 rounded-xl text-bni-gray font-medium hover:bg-gray-100 transition-colors"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={handleResetConfirm}
+                disabled={!resetPin}
+                className="flex-1 p-3 rounded-xl bg-red-600 text-white font-bold active:scale-95 transition-all disabled:opacity-50"
+              >
+                Zurücksetzen
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

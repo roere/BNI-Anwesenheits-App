@@ -58,3 +58,19 @@ export interface MemberWithAttendance extends Member {
 export interface GuestWithAttendance extends Guest {
   attendance?: GuestAttendance;
 }
+
+// Kiosk-Modus Types
+export interface KioskStatus {
+  active: boolean;
+  tokenPreview?: string;
+}
+
+export interface KioskActivateResponse {
+  token: string;
+  message: string;
+}
+
+export interface KioskValidateResponse {
+  valid: boolean;
+  mode: "kiosk" | "readonly" | "open";
+}
