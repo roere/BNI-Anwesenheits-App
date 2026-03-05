@@ -475,15 +475,21 @@ function MeetingsTab() {
     doc.text(dateStr, 14, 36);
 
     // Zusammenfassung
+    const checkedInGuests = guestAttendances.filter((ga) => ga.signature_data);
+    const totalCheckedIn = present.length + represented.length + checkedInGuests.length;
+
     doc.setFontSize(10);
+    doc.setTextColor(0);
+    doc.text(`Gesamtteilnehmer (eingecheckt): ${totalCheckedIn}`, 14, 44);
+    doc.setTextColor(100);
     doc.text(
-      `Anwesend: ${present.length}  |  Vertreten: ${represented.length}  |  Abwesend: ${absent.length}  |  Gäste: ${guestAttendances.length}`,
+      `Anwesend: ${present.length}  |  Vertreten: ${represented.length}  |  Abwesend: ${absent.length}  |  Gäste: ${checkedInGuests.length}`,
       14,
-      44
+      50
     );
 
     // Mitglieder-Tabelle
-    let y = 56;
+    let y = 62;
     doc.setTextColor(0);
     doc.setFontSize(12);
     doc.text("Mitglieder", 14, y);
