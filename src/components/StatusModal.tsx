@@ -58,7 +58,6 @@ export default function StatusModal({ member, onSelect, onClose }: StatusModalPr
                 onChange={(e) => setRepresentedBy(e.target.value)}
                 placeholder="Name der Vertretung"
                 className="w-full p-3 sm:p-4 rounded-xl border-2 border-gray-300 text-base sm:text-lg focus:border-bni-red focus:outline-none"
-                autoFocus
               />
               <button
                 onClick={() => {

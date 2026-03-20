@@ -93,7 +93,6 @@ export default function GuestModal({ meetingId, onGuestAdded, onClose }: GuestMo
               }}
               placeholder="Name des Gastes"
               className="w-full p-3 sm:p-4 rounded-xl border-2 border-gray-300 text-base sm:text-lg focus:border-bni-red focus:outline-none"
-              autoFocus
             />
             {/* Autocomplete-Vorschläge */}
             {suggestions.length > 0 && !selectedGuest && (

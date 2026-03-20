@@ -48,7 +48,6 @@ export default function AdminPage() {
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
             placeholder="PIN eingeben"
             className="w-full p-4 rounded-xl border-2 border-gray-300 text-lg text-center tracking-widest focus:border-bni-red focus:outline-none mb-4"
-            autoFocus
           />
           {loginError && (
             <p className="text-red-500 text-sm text-center mb-4">{loginError}</p>
@@ -206,7 +205,6 @@ function MembersTab({ pin }: { pin: string }) {
             onChange={(e) => setNewName(e.target.value)}
             placeholder="Name"
             className="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:border-bni-red focus:outline-none"
-            autoFocus
           />
           <input
             type="text"
@@ -385,7 +383,6 @@ function GuestsTab({ pin }: { pin: string }) {
               onChange={(e) => setAssignGuestName(e.target.value)}
               placeholder="Name des Gastes"
               className="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:border-bni-red focus:outline-none"
-              autoFocus
             />
             <input
               type="text"
@@ -534,8 +531,22 @@ function MeetingsTab() {
       y += 6;
     }
 
-    // Gäste-Tabelle
-    if (guestAttendances.length > 0) {
+    // Gäste-Tabelle (inkl. Vertretungen)
+    const vertretungen = represented.map((a) => ({
+      name: a.represented_by || "",
+      firma: a.member?.fachgebiet || "",
+      status: "Vertretung für " + (a.member?.name || ""),
+      isVertretung: true,
+    }));
+    const guestRows = guestAttendances.map((ga) => ({
+      name: ga.guest?.name || "",
+      firma: ga.guest?.firma || "",
+      status: ga.signature_data ? "Eingecheckt" : "Nicht eingecheckt",
+      isVertretung: false,
+    }));
+    const allGuests = [...guestRows, ...vertretungen];
+
+    if (allGuests.length > 0) {
       y += 6;
       if (y > 260) {
         doc.addPage();
@@ -549,7 +560,8 @@ function MeetingsTab() {
       doc.setFontSize(9);
       doc.setTextColor(100);
       doc.text("Name", 14, y + 6);
-      doc.text("Firma", 110, y + 6);
+      doc.text("Firma", 80, y + 6);
+      doc.text("Status", 150, y + 6);
       y += 8;
       doc.line(14, y, 196, y);
       y += 4;
@@ -557,15 +569,20 @@ function MeetingsTab() {
       doc.setTextColor(0);
       doc.setFontSize(10);
 
-      for (const ga of guestAttendances) {
+      for (const g of allGuests) {
         if (y > 270) {
           doc.addPage();
           y = 20;
         }
-        doc.text(ga.guest?.name || "", 14, y);
-        if (ga.guest?.firma) {
-          doc.text(ga.guest.firma, 110, y);
+        doc.text(g.name, 14, y);
+        if (g.firma) {
+          doc.text(g.firma, 80, y);
         }
+        doc.setFontSize(8);
+        doc.setTextColor(100);
+        doc.text(g.status, 150, y);
+        doc.setFontSize(10);
+        doc.setTextColor(0);
         y += 6;
       }
     }

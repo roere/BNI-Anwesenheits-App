@@ -555,7 +555,6 @@ export default function CheckInPage() {
               onKeyDown={(e) => e.key === "Enter" && handleResetConfirm()}
               placeholder="Admin-PIN"
               className="w-full p-4 rounded-xl border-2 border-gray-300 text-lg text-center tracking-widest focus:border-bni-red focus:outline-none mb-3"
-              autoFocus
             />
             {resetError && (
               <p className="text-red-500 text-sm text-center mb-3">{resetError}</p>
