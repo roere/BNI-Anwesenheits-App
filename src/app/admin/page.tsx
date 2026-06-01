@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { adminFetch } from "@/lib/admin-api";
-import { formatBerlinTime } from "@/lib/time";
+import { formatBerlinTime, getWeekday, WEEKDAY_NAMES } from "@/lib/time";
 import { matchMemberId } from "@/lib/match-member";
 import type {
   Member,
@@ -693,6 +693,9 @@ function MeetingsTab({ pin }: { pin: string }) {
   const [selectedMeeting, setSelectedMeeting] = useState<string | null>(null);
   const [attendances, setAttendances] = useState<(MemberAttendance & { member: Member })[]>([]);
   const [guestAttendances, setGuestAttendances] = useState<(GuestAttendance & { guest: Guest })[]>([]);
+  // Treffen-Wochentag-Filter: standardmäßig nur Treffen am konfigurierten Wochentag
+  const [meetingWeekday, setMeetingWeekday] = useState(5);
+  const [showAllDays, setShowAllDays] = useState(false);
 
   const toggleGuestAbsent = async (attendanceId: string, absent: boolean) => {
     await adminFetch("/api/admin/guests/absent", pin, {
@@ -907,6 +910,23 @@ function MeetingsTab({ pin }: { pin: string }) {
     loadMeetings();
   }, [loadMeetings]);
 
+  useEffect(() => {
+    const loadWeekday = async () => {
+      const { data } = await supabase
+        .from("settings")
+        .select("value")
+        .eq("key", "meeting_weekday")
+        .single();
+      const w = parseInt(data?.value ?? "5", 10);
+      if (!Number.isNaN(w) && w >= 0 && w <= 6) setMeetingWeekday(w);
+    };
+    loadWeekday();
+  }, []);
+
+  const visibleMeetings = showAllDays
+    ? meetings
+    : meetings.filter((m) => getWeekday(m.date) === meetingWeekday);
+
   const loadMeetingDetails = async (meetingId: string) => {
     setSelectedMeeting(meetingId);
     const { data: attData } = await supabase
@@ -924,12 +944,28 @@ function MeetingsTab({ pin }: { pin: string }) {
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Meeting-Historie</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h2 className="text-xl font-bold">Meeting-Historie</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showAllDays}
+            onChange={(e) => setShowAllDays(e.target.checked)}
+          />
+          Auch andere Wochentage zeigen
+        </label>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Meeting-Liste */}
         <div className="bg-white rounded-xl overflow-hidden">
-          {meetings.map((m) => (
+          {visibleMeetings.length === 0 && (
+            <p className="p-4 text-sm text-gray-500">
+              Keine Treffen am {WEEKDAY_NAMES[meetingWeekday]}. Aktiviere „Auch andere
+              Wochentage zeigen", um abweichende Termine zu sehen.
+            </p>
+          )}
+          {visibleMeetings.map((m) => (
             <button
               key={m.id}
               onClick={() => loadMeetingDetails(m.id)}
@@ -1211,6 +1247,9 @@ function SettingsTab({ pin }: { pin: string }) {
   const [lateEnabled, setLateEnabled] = useState(false);
   const [lateTime, setLateTime] = useState("07:00");
   const [lateSaved, setLateSaved] = useState(false);
+  // Treffen-Wochentag (0=Sonntag .. 6=Samstag)
+  const [meetingWeekday, setMeetingWeekday] = useState("5");
+  const [weekdaySaved, setWeekdaySaved] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -1222,6 +1261,7 @@ function SettingsTab({ pin }: { pin: string }) {
           "disclaimer_text_guests",
           "late_threshold_enabled",
           "late_threshold_time",
+          "meeting_weekday",
         ]);
       if (data) {
         const map = Object.fromEntries(data.map((s) => [s.key, s.value]));
@@ -1230,6 +1270,7 @@ function SettingsTab({ pin }: { pin: string }) {
         setDisclaimerTextGuests(map.disclaimer_text_guests ?? map.disclaimer_text ?? "");
         setLateEnabled(map.late_threshold_enabled === "true");
         if (map.late_threshold_time) setLateTime(map.late_threshold_time);
+        if (map.meeting_weekday !== undefined) setMeetingWeekday(map.meeting_weekday);
       }
     };
     load();
@@ -1253,6 +1294,15 @@ function SettingsTab({ pin }: { pin: string }) {
     setTimeout(() => setSavedGuests(false), 2000);
   };
 
+  const handleSaveWeekday = async () => {
+    await adminFetch("/api/admin/settings", pin, {
+      method: "PUT",
+      body: JSON.stringify({ key: "meeting_weekday", value: meetingWeekday }),
+    });
+    setWeekdaySaved(true);
+    setTimeout(() => setWeekdaySaved(false), 2000);
+  };
+
   const handleSaveLate = async () => {
     await adminFetch("/api/admin/settings", pin, {
       method: "PUT",
@@ -1274,6 +1324,37 @@ function SettingsTab({ pin }: { pin: string }) {
       <h2 className="text-xl font-bold mb-4">Einstellungen</h2>
 
       <div className="bg-white rounded-xl p-6">
+        <h3 className="font-bold text-lg mb-3">Treffen-Wochentag</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          An welchem Wochentag die wöchentlichen Treffen stattfinden. Nur an diesem
+          Tag kann Anwesenheit erfasst werden. In der Meeting-Übersicht werden
+          standardmäßig nur Treffen dieses Wochentags angezeigt.
+        </p>
+        <div className="flex items-center gap-3">
+          <label className="font-medium text-sm">Wochentag:</label>
+          <select
+            value={meetingWeekday}
+            onChange={(e) => setMeetingWeekday(e.target.value)}
+            className="p-2 rounded-lg border-2 border-gray-300 focus:border-bni-red focus:outline-none"
+          >
+            {[1, 2, 3, 4, 5, 6, 0].map((d) => (
+              <option key={d} value={String(d)}>
+                {WEEKDAY_NAMES[d]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={handleSaveWeekday}
+          className={`mt-4 px-6 py-3 rounded-xl text-white font-bold transition-all ${
+            weekdaySaved ? "bg-green-500" : "bg-bni-red"
+          }`}
+        >
+          {weekdaySaved ? "Gespeichert ✓" : "Speichern"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl p-6 mt-6">
         <h3 className="font-bold text-lg mb-3">Disclaimer-Text – Mitglieder</h3>
         <p className="text-sm text-gray-500 mb-3">
           Dieser Text wird Mitgliedern vor der Unterschrift angezeigt und muss

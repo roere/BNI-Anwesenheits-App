@@ -3,7 +3,16 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { kioskFetch, getKioskToken } from "@/lib/kiosk-api";
-import { getBerlinMinutesNow, parseTimeToMinutes, formatBerlinTime } from "@/lib/time";
+import {
+  getBerlinMinutesNow,
+  parseTimeToMinutes,
+  formatBerlinTime,
+  getBerlinTodayISO,
+  getWeekday,
+  lastMeetingDate,
+  nextMeetingDate,
+  WEEKDAY_NAMES,
+} from "@/lib/time";
 import type {
   Member,
   MemberAttendance,
@@ -53,13 +62,19 @@ export default function CheckInPage() {
   const [adminOverrideMemberId, setAdminOverrideMemberId] = useState<string | null>(null);
   // Aktionsmenü (Doppeltipp): "zu spät" umschalten / zurücksetzen
   const [actionMenuMember, setActionMenuMember] = useState<Member | null>(null);
+  // Treffen-Wochentag (0=Sonntag .. 6=Samstag) aus den Einstellungen
+  const [meetingWeekday, setMeetingWeekday] = useState(5);
+  // Ist heute der Treffen-Tag? Nur dann darf Anwesenheit erfasst werden.
+  const [isMeetingDay, setIsMeetingDay] = useState(true);
+  // Datum des aktuell angezeigten Treffens (heute am Treffen-Tag, sonst letztes/nächstes)
+  const [targetDate, setTargetDate] = useState("");
+  // An Nicht-Treffen-Tagen: zwischen letztem und nächstem Treffen umschalten
+  const [selection, setSelection] = useState<"last" | "next">("last");
 
-  const canWrite = kioskMode === "kiosk" || kioskMode === "open";
-
-  const getTodayFriday = () => {
-    const today = new Date();
-    return today.toISOString().split("T")[0];
-  };
+  // Kiosk-/Open-Schreibrecht des Geräts (unabhängig vom Treffen-Tag)
+  const canWriteKiosk = kioskMode === "kiosk" || kioskMode === "open";
+  // Tatsächliches Schreibrecht: nur am Treffen-Tag möglich
+  const canWrite = canWriteKiosk && isMeetingDay;
 
   const validateKiosk = useCallback(async () => {
     try {
@@ -78,58 +93,7 @@ export default function CheckInPage() {
   }, []);
 
   const loadData = useCallback(async () => {
-    const todayDate = getTodayFriday();
-
-    // Meeting für heute laden
-    let { data: meetingData } = await supabase
-      .from("meetings")
-      .select("*")
-      .eq("date", todayDate)
-      .single();
-
-    // Meeting erstellen nur wenn schreibberechtigt
-    if (!meetingData && canWrite) {
-      try {
-        const newMeeting = await kioskFetch<Meeting>("/api/attendance/meeting", {
-          method: "POST",
-          body: JSON.stringify({ date: todayDate }),
-        });
-        meetingData = newMeeting;
-      } catch {
-        // Meeting konnte nicht erstellt werden
-      }
-    }
-
-    if (meetingData) {
-      setMeeting(meetingData);
-
-      // Mitglieder laden
-      const { data: membersData } = await supabase
-        .from("members")
-        .select("*")
-        .eq("active", true)
-        .order("name");
-
-      if (membersData) setMembers(membersData);
-
-      // Anwesenheiten laden
-      const { data: attendanceData } = await supabase
-        .from("member_attendance")
-        .select("*")
-        .eq("meeting_id", meetingData.id);
-
-      if (attendanceData) setAttendances(attendanceData);
-
-      // Gäste-Anwesenheiten laden
-      const { data: guestAttData } = await supabase
-        .from("guest_attendance")
-        .select("*, guest:guests(*)")
-        .eq("meeting_id", meetingData.id);
-
-      if (guestAttData) setGuestAttendances(guestAttData as any);
-    }
-
-    // Einstellungen laden (Disclaimer Mitglieder/Gäste + automatische "zu spät"-Erkennung)
+    // Einstellungen zuerst laden – der Treffen-Wochentag bestimmt das Zieldatum.
     const { data: settingsData } = await supabase
       .from("settings")
       .select("key, value")
@@ -138,8 +102,10 @@ export default function CheckInPage() {
         "disclaimer_text_guests",
         "late_threshold_enabled",
         "late_threshold_time",
+        "meeting_weekday",
       ]);
 
+    let weekday = 5; // Default: Freitag
     if (settingsData) {
       const map = Object.fromEntries(settingsData.map((s) => [s.key, s.value]));
       if (map.disclaimer_text !== undefined) setDisclaimerTextMembers(map.disclaimer_text);
@@ -147,10 +113,75 @@ export default function CheckInPage() {
       setDisclaimerTextGuests(map.disclaimer_text_guests ?? map.disclaimer_text ?? "");
       setLateThresholdEnabled(map.late_threshold_enabled === "true");
       setLateThresholdTime(map.late_threshold_time ?? "");
+      const w = parseInt(map.meeting_weekday ?? "5", 10);
+      if (!Number.isNaN(w) && w >= 0 && w <= 6) weekday = w;
+    }
+    setMeetingWeekday(weekday);
+
+    const today = getBerlinTodayISO();
+    const meetingDay = getWeekday(today) === weekday;
+    setIsMeetingDay(meetingDay);
+
+    // Zieldatum: heute am Treffen-Tag, sonst je nach Auswahl letztes/nächstes Treffen
+    const target = meetingDay
+      ? today
+      : selection === "next"
+      ? nextMeetingDate(today, weekday)
+      : lastMeetingDate(today, weekday);
+    setTargetDate(target);
+
+    // Mitglieder immer laden (auch außerhalb des Treffen-Tags für die Ansicht)
+    const { data: membersData } = await supabase
+      .from("members")
+      .select("*")
+      .eq("active", true)
+      .order("name");
+    if (membersData) setMembers(membersData);
+
+    // Meeting für das Zieldatum laden
+    let { data: meetingData } = await supabase
+      .from("meetings")
+      .select("*")
+      .eq("date", target)
+      .single();
+
+    // Neues Meeting nur am Treffen-Tag und mit Schreibrecht anlegen
+    if (!meetingData && meetingDay && canWriteKiosk) {
+      try {
+        meetingData = await kioskFetch<Meeting>("/api/attendance/meeting", {
+          method: "POST",
+          body: JSON.stringify({ date: target }),
+        });
+      } catch {
+        // Meeting konnte nicht erstellt werden
+      }
+    }
+
+    if (meetingData) {
+      setMeeting(meetingData);
+
+      // Anwesenheiten laden
+      const { data: attendanceData } = await supabase
+        .from("member_attendance")
+        .select("*")
+        .eq("meeting_id", meetingData.id);
+      setAttendances(attendanceData ?? []);
+
+      // Gäste-Anwesenheiten laden
+      const { data: guestAttData } = await supabase
+        .from("guest_attendance")
+        .select("*, guest:guests(*)")
+        .eq("meeting_id", meetingData.id);
+      setGuestAttendances((guestAttData as any) ?? []);
+    } else {
+      // Kein Treffen für das Zieldatum (z.B. nächstes Treffen noch nicht angelegt)
+      setMeeting(null);
+      setAttendances([]);
+      setGuestAttendances([]);
     }
 
     setLoading(false);
-  }, [canWrite]);
+  }, [canWriteKiosk, selection]);
 
   useEffect(() => {
     validateKiosk();
@@ -468,21 +499,68 @@ export default function CheckInPage() {
     );
   }
 
-  const todayFormatted = new Date().toLocaleDateString("de-DE", {
+  // Datum des angezeigten Treffens (am Treffen-Tag = heute, sonst letztes/nächstes)
+  const displayDate = targetDate || getBerlinTodayISO();
+  const dateFormatted = new Date(displayDate + "T00:00:00").toLocaleDateString("de-DE", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
   });
 
+  // Datumsangaben für den Umschalter an Nicht-Treffen-Tagen
+  const todayISO = getBerlinTodayISO();
+  const lastDate = lastMeetingDate(todayISO, meetingWeekday);
+  const nextDate = nextMeetingDate(todayISO, meetingWeekday);
+  const formatShort = (iso: string) =>
+    new Date(iso + "T00:00:00").toLocaleDateString("de-DE", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+    });
+
   return (
     <div className="min-h-screen bg-bni-gray-light">
-      {/* Read-Only Banner */}
-      {kioskMode === "readonly" && (
+      {/* Read-Only Banner (Kiosk-Gerät) – nur am Treffen-Tag relevant */}
+      {kioskMode === "readonly" && isMeetingDay && (
         <div className="bg-yellow-100 border-b-2 border-yellow-400 px-6 py-3 text-center">
           <p className="text-yellow-800 font-semibold">
             Nur-Lese-Modus — Anwesenheit kann nur am Kiosk-Gerät erfasst werden
           </p>
+        </div>
+      )}
+
+      {/* Banner + Umschalter an Nicht-Treffen-Tagen */}
+      {!isMeetingDay && (
+        <div className="bg-blue-50 border-b-2 border-blue-300 px-4 py-3">
+          <div className="max-w-6xl mx-auto">
+            <p className="text-blue-900 font-semibold text-center mb-3">
+              Heute ist kein Treffen-Tag. Anwesenheit kann nur {WEEKDAY_NAMES[meetingWeekday]}s
+              erfasst werden.
+            </p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              <button
+                onClick={() => setSelection("last")}
+                className={`px-4 py-2 rounded-xl font-medium text-sm transition-all ${
+                  selection === "last"
+                    ? "bg-bni-red text-white"
+                    : "bg-white text-bni-gray border-2 border-gray-200"
+                }`}
+              >
+                ← Letztes Treffen · {formatShort(lastDate)}
+              </button>
+              <button
+                onClick={() => setSelection("next")}
+                className={`px-4 py-2 rounded-xl font-medium text-sm transition-all ${
+                  selection === "next"
+                    ? "bg-bni-red text-white"
+                    : "bg-white text-bni-gray border-2 border-gray-200"
+                }`}
+              >
+                Nächstes Treffen · {formatShort(nextDate)} →
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -501,7 +579,7 @@ export default function CheckInPage() {
             )}
           </div>
           <div className="text-right shrink-0">
-            <p className="text-sm sm:text-lg font-semibold">{todayFormatted}</p>
+            <p className="text-sm sm:text-lg font-semibold">{dateFormatted}</p>
             <p className="text-xs sm:text-sm opacity-90">
               {attendances.length} / {members.length} erfasst
             </p>

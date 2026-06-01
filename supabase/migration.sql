@@ -79,6 +79,11 @@ INSERT INTO settings (key, value) VALUES
   ('late_threshold_time', '07:00')
 ON CONFLICT (key) DO NOTHING;
 
+-- Treffen-Wochentag (0=Sonntag .. 6=Samstag, wie Date.getDay()). Default: Freitag (5).
+INSERT INTO settings (key, value) VALUES
+  ('meeting_weekday', '5')
+ON CONFLICT (key) DO NOTHING;
+
 -- Bestehende Datenbanken: CHECK-Constraint um die neuen Status erweitern.
 -- (CREATE TABLE IF NOT EXISTS legt den Constraint bei vorhandener Tabelle nicht neu an.)
 ALTER TABLE member_attendance DROP CONSTRAINT IF EXISTS member_attendance_status_check;
