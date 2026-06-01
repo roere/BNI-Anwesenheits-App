@@ -19,7 +19,7 @@ export async function PUT(req: NextRequest) {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase
     .from("settings")
-    .upsert({ key, value });
+    .upsert({ key, value }, { onConflict: "key" });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

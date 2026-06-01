@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS member_attendance (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   meeting_id UUID NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   member_id UUID NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('PRESENT', 'REPRESENTED', 'ABSENT')),
+  status TEXT NOT NULL CHECK (status IN ('PRESENT', 'REPRESENTED', 'ABSENT', 'LATE', 'MEDICAL_ABSENT')),
   represented_by TEXT,
   signature_data TEXT,
   disclaimer_accepted BOOLEAN NOT NULL DEFAULT false,
@@ -67,29 +67,37 @@ Hiermit versichere ich ausdrücklich, dass ich keine Symptome einer Covid-19-Erk
 Mit der Teilnahme an diesem Treffen verpflichten Sie sich zur Einhaltung aller gesetzlich erforderlichen Regeln (z.B.: Mindestabstand, Mundschutz) sowie zur eigenverantwortlichen Einhaltung aller sonst möglichen Schutz- und Hygienemaßnahmen gegenüber anderen Teilnehmern, dies sind z.B.: kein Händeschütteln, keine Umarmungen, keine Berührungen, keine Teilnahme bei Verdacht auf eine Erkrankung, Meldung von Verdachtsfällen auch im Nachhinein, gründliche Händehygiene & Desinfektion.'
 ) ON CONFLICT (key) DO NOTHING;
 
--- Seed: Mitglieder aus BNI Königsforst (Overath)
+-- Automatische "zu spät"-Erkennung (ab Uhrzeit, Europe/Berlin / MEZ-MESZ)
+INSERT INTO settings (key, value) VALUES
+  ('late_threshold_enabled', 'false'),
+  ('late_threshold_time', '07:00')
+ON CONFLICT (key) DO NOTHING;
+
+-- Bestehende Datenbanken: CHECK-Constraint um die neuen Status erweitern.
+-- (CREATE TABLE IF NOT EXISTS legt den Constraint bei vorhandener Tabelle nicht neu an.)
+ALTER TABLE member_attendance DROP CONSTRAINT IF EXISTS member_attendance_status_check;
+ALTER TABLE member_attendance
+  ADD CONSTRAINT member_attendance_status_check
+  CHECK (status IN ('PRESENT', 'REPRESENTED', 'ABSENT', 'LATE', 'MEDICAL_ABSENT'));
+
+-- Seed: Mitglieder aus der PDF-Liste
 INSERT INTO members (name, fachgebiet) VALUES
-  ('Daniel Crnadak', 'Rolladen- und Markisenbau'),
-  ('Dirk Dahs', 'Dachdeckerei'),
-  ('Emanuel Piasula', 'Malerei und Lackiererei'),
-  ('Fetaji Qani', 'Autopflege-Reparatur'),
-  ('Franco Giannini', 'Finanzen & Versicherungen'),
-  ('Hendrik Müller', 'Metallbau'),
-  ('Jörg Julius Kapune', 'Tischlerei / Schreinerei'),
-  ('Jörg-Bernd Bonekamp', 'IT- und Netzwerktechnik'),
-  ('Katharina Kolzem', 'Immobilienverwaltung'),
-  ('Leon Nedieck', 'Webdesign'),
-  ('Lucas Clever', 'Autoservice'),
-  ('Marc Dahs', 'Dachdeckerei'),
-  ('Marco Korbach', 'Versicherungsvertretung'),
-  ('Max van Laer', 'Finanzierungsvermittlung'),
-  ('Michele Di Lorenzo', 'Abbrucharbeiten'),
-  ('Oliver Zgunea', 'Versicherungsvermittlung'),
-  ('René Roderstein', 'Gesundheit & Wellness'),
-  ('Sebastian Winter', 'Werbung & Marketing'),
-  ('Simon Lehn', 'Sanitär- und Heizungsinstallation'),
-  ('Slobodan Zlatanovic', 'Fitness- und Wellnesseinrichtungen'),
-  ('Tino Müllenbach', 'Lebensmittelherstellung');
+  ('Tino Müllenbach', ''),
+  ('Daniel Grundahl', 'Bandkunst'),
+  ('Dirk Dols', 'Dachdecker'),
+  ('Dirk Hawe', 'Elektro + PV'),
+  ('Jörg Benchop', 'IT'),
+  ('Henrik Müller', ''),
+  ('Joris Keyen', 'Versicherung'),
+  ('Reiko Pedersen', 'Psychotherapie'),
+  ('Simon Leith', 'Insi. Hz. & San.'),
+  ('Franca Gianni', 'Wrecht'),
+  ('Max von Gars', 'Facturing'),
+  ('Alexander Jahnke', ''),
+  ('Dennis Schod', ''),
+  ('Tristan Low', ''),
+  ('D. Lorenzo', 'Entrümpelung'),
+  ('L. Niedereck', 'Print');
 
 -- Indices für Performance
 CREATE INDEX IF NOT EXISTS idx_member_attendance_meeting ON member_attendance(meeting_id);
@@ -97,35 +105,3 @@ CREATE INDEX IF NOT EXISTS idx_member_attendance_member ON member_attendance(mem
 CREATE INDEX IF NOT EXISTS idx_guest_attendance_meeting ON guest_attendance(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_guest_attendance_guest ON guest_attendance(guest_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_date ON meetings(date);
-
--- ==================== RLS-Policies ====================
-
--- Members: Anon darf nur lesen, Schreibzugriff über service_role (Admin-API)
-ALTER TABLE members ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Mitglieder lesen" ON members FOR SELECT TO anon USING (true);
-
--- Guests: Anon darf lesen, erstellen und aktualisieren (Check-in-Flow)
-ALTER TABLE guests ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Gäste lesen" ON guests FOR SELECT TO anon USING (true);
-CREATE POLICY "Gäste erstellen" ON guests FOR INSERT TO anon WITH CHECK (true);
-CREATE POLICY "Gäste aktualisieren" ON guests FOR UPDATE TO anon USING (true) WITH CHECK (true);
-
--- Meetings: Anon darf lesen und erstellen (Auto-Erstellung)
-ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Meetings lesen" ON meetings FOR SELECT TO anon USING (true);
-CREATE POLICY "Meetings erstellen" ON meetings FOR INSERT TO anon WITH CHECK (true);
-
--- Member Attendance: Anon darf lesen, erfassen und zurücksetzen
-ALTER TABLE member_attendance ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Anwesenheit lesen" ON member_attendance FOR SELECT TO anon USING (true);
-CREATE POLICY "Anwesenheit erfassen" ON member_attendance FOR INSERT TO anon WITH CHECK (true);
-CREATE POLICY "Anwesenheit zurücksetzen" ON member_attendance FOR DELETE TO anon USING (true);
-
--- Guest Attendance: Anon darf lesen und erfassen
-ALTER TABLE guest_attendance ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Gast-Anwesenheit lesen" ON guest_attendance FOR SELECT TO anon USING (true);
-CREATE POLICY "Gast-Anwesenheit erfassen" ON guest_attendance FOR INSERT TO anon WITH CHECK (true);
-
--- Settings: Anon darf nur lesen, Bearbeiten über service_role (Admin-API)
-ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Einstellungen lesen" ON settings FOR SELECT TO anon USING (true);

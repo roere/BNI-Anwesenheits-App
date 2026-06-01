@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { adminFetch } from "@/lib/admin-api";
+import { formatBerlinTime } from "@/lib/time";
 import type {
   Member,
   Guest,
@@ -459,7 +460,9 @@ function MeetingsTab() {
     });
 
     const present = attendances.filter((a) => a.status === "PRESENT");
+    const late = attendances.filter((a) => a.status === "LATE");
     const represented = attendances.filter((a) => a.status === "REPRESENTED");
+    const medicalAbsent = attendances.filter((a) => a.status === "MEDICAL_ABSENT");
     const absent = attendances.filter((a) => a.status === "ABSENT");
 
     // Header
@@ -473,14 +476,15 @@ function MeetingsTab() {
 
     // Zusammenfassung
     const checkedInGuests = guestAttendances.filter((ga) => ga.signature_data);
-    const totalCheckedIn = present.length + represented.length + checkedInGuests.length;
+    const totalCheckedIn =
+      present.length + late.length + represented.length + checkedInGuests.length;
 
     doc.setFontSize(10);
     doc.setTextColor(0);
     doc.text(`Gesamtteilnehmer (eingecheckt): ${totalCheckedIn}`, 14, 44);
     doc.setTextColor(100);
     doc.text(
-      `Anwesend: ${present.length}  |  Vertreten: ${represented.length}  |  Abwesend: ${absent.length}  |  Gäste: ${checkedInGuests.length}`,
+      `Anwesend: ${present.length}  |  Zu spät: ${late.length}  |  Vertreten: ${represented.length}  |  Medizinisch: ${medicalAbsent.length}  |  Abwesend: ${absent.length}  |  Gäste: ${checkedInGuests.length}`,
       14,
       50
     );
@@ -496,8 +500,9 @@ function MeetingsTab() {
     doc.setFontSize(9);
     doc.setTextColor(100);
     doc.text("Name", 14, y + 6);
-    doc.text("Status", 110, y + 6);
-    doc.text("Vertretung", 150, y + 6);
+    doc.text("Status", 95, y + 6);
+    doc.text("Uhrzeit", 140, y + 6);
+    doc.text("Vertretung", 165, y + 6);
     y += 8;
     doc.setDrawColor(200);
     doc.line(14, y, 196, y);
@@ -519,14 +524,27 @@ function MeetingsTab() {
       const statusText =
         a.status === "PRESENT"
           ? "Anwesend"
+          : a.status === "LATE"
+          ? "Zu spät"
           : a.status === "REPRESENTED"
           ? "Vertreten"
+          : a.status === "MEDICAL_ABSENT"
+          ? "Medizinisch abw."
           : "Abwesend";
 
+      // Uhrzeit nur bei physischer Anwesenheit (anwesend / zu spät)
+      const timeText =
+        a.status === "PRESENT" || a.status === "LATE"
+          ? formatBerlinTime(a.created_at)
+          : "";
+
       doc.text(a.member?.name || "", 14, y);
-      doc.text(statusText, 110, y);
+      doc.text(statusText, 95, y);
+      if (timeText) {
+        doc.text(timeText, 140, y);
+      }
       if (a.represented_by) {
-        doc.text(a.represented_by, 150, y);
+        doc.text(a.represented_by, 165, y);
       }
       y += 6;
     }
@@ -696,15 +714,23 @@ function MeetingsTab() {
                   className={`p-3 rounded-lg flex items-center justify-between ${
                     a.status === "PRESENT"
                       ? "bg-green-50"
+                      : a.status === "LATE"
+                      ? "bg-orange-50"
                       : a.status === "REPRESENTED"
                       ? "bg-yellow-50"
+                      : a.status === "MEDICAL_ABSENT"
+                      ? "bg-blue-50"
                       : "bg-red-50"
                   }`}
                 >
                   <span className="font-medium">{a.member?.name}</span>
                   <span className="text-sm">
-                    {a.status === "PRESENT" && "Anwesend"}
+                    {a.status === "PRESENT" &&
+                      `Anwesend${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
+                    {a.status === "LATE" &&
+                      `Zu spät${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
                     {a.status === "REPRESENTED" && `Vertreten: ${a.represented_by}`}
+                    {a.status === "MEDICAL_ABSENT" && "Medizinisch abwesend"}
                     {a.status === "ABSENT" && "Abwesend"}
                   </span>
                 </div>
@@ -735,7 +761,15 @@ function MeetingsTab() {
 // ==================== Statistiken-Tab ====================
 function StatsTab() {
   const [stats, setStats] = useState<
-    { member: Member; present: number; represented: number; absent: number; total: number }[]
+    {
+      member: Member;
+      present: number;
+      late: number;
+      represented: number;
+      medical: number;
+      absent: number;
+      total: number;
+    }[]
   >([]);
   const [period, setPeriod] = useState("all");
 
@@ -782,7 +816,9 @@ function StatsTab() {
       return {
         member,
         present: memberAtt.filter((a) => a.status === "PRESENT").length,
+        late: memberAtt.filter((a) => a.status === "LATE").length,
         represented: memberAtt.filter((a) => a.status === "REPRESENTED").length,
+        medical: memberAtt.filter((a) => a.status === "MEDICAL_ABSENT").length,
         absent: memberAtt.filter((a) => a.status === "ABSENT").length,
         total: memberAtt.length,
       };
@@ -817,16 +853,22 @@ function StatsTab() {
             <tr>
               <th className="text-left p-4 font-semibold">Mitglied</th>
               <th className="text-center p-4 font-semibold">Anwesend</th>
+              <th className="text-center p-4 font-semibold">Zu spät</th>
               <th className="text-center p-4 font-semibold">Vertreten</th>
+              <th className="text-center p-4 font-semibold">Medizin.</th>
               <th className="text-center p-4 font-semibold">Abwesend</th>
               <th className="text-center p-4 font-semibold">Quote</th>
             </tr>
           </thead>
           <tbody>
             {stats.map((s) => {
+              // Medizinisch abwesend ist entschuldigt und fließt nicht in die Quote ein.
+              const relevant = s.total - s.medical;
               const quote =
-                s.total > 0
-                  ? Math.round(((s.present + s.represented) / s.total) * 100)
+                relevant > 0
+                  ? Math.round(
+                      ((s.present + s.late + s.represented) / relevant) * 100
+                    )
                   : 0;
               return (
                 <tr key={s.member.id} className="border-t">
@@ -838,8 +880,14 @@ function StatsTab() {
                   <td className="p-4 text-center text-green-600 font-medium">
                     {s.present}
                   </td>
+                  <td className="p-4 text-center text-orange-600 font-medium">
+                    {s.late}
+                  </td>
                   <td className="p-4 text-center text-yellow-600 font-medium">
                     {s.represented}
+                  </td>
+                  <td className="p-4 text-center text-blue-600 font-medium">
+                    {s.medical}
                   </td>
                   <td className="p-4 text-center text-red-600 font-medium">
                     {s.absent}
@@ -869,15 +917,27 @@ function StatsTab() {
 function SettingsTab({ pin }: { pin: string }) {
   const [disclaimerText, setDisclaimerText] = useState("");
   const [saved, setSaved] = useState(false);
+  // Automatische "zu spät"-Erkennung
+  const [lateEnabled, setLateEnabled] = useState(false);
+  const [lateTime, setLateTime] = useState("07:00");
+  const [lateSaved, setLateSaved] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       const { data } = await supabase
         .from("settings")
-        .select("value")
-        .eq("key", "disclaimer_text")
-        .single();
-      if (data) setDisclaimerText(data.value);
+        .select("key, value")
+        .in("key", [
+          "disclaimer_text",
+          "late_threshold_enabled",
+          "late_threshold_time",
+        ]);
+      if (data) {
+        const map = Object.fromEntries(data.map((s) => [s.key, s.value]));
+        if (map.disclaimer_text !== undefined) setDisclaimerText(map.disclaimer_text);
+        setLateEnabled(map.late_threshold_enabled === "true");
+        if (map.late_threshold_time) setLateTime(map.late_threshold_time);
+      }
     };
     load();
   }, []);
@@ -889,6 +949,22 @@ function SettingsTab({ pin }: { pin: string }) {
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveLate = async () => {
+    await adminFetch("/api/admin/settings", pin, {
+      method: "PUT",
+      body: JSON.stringify({
+        key: "late_threshold_enabled",
+        value: lateEnabled ? "true" : "false",
+      }),
+    });
+    await adminFetch("/api/admin/settings", pin, {
+      method: "PUT",
+      body: JSON.stringify({ key: "late_threshold_time", value: lateTime }),
+    });
+    setLateSaved(true);
+    setTimeout(() => setLateSaved(false), 2000);
   };
 
   return (
@@ -914,6 +990,47 @@ function SettingsTab({ pin }: { pin: string }) {
           }`}
         >
           {saved ? "Gespeichert ✓" : "Speichern"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl p-6 mt-6">
+        <h3 className="font-bold text-lg mb-3">Automatische „zu spät"-Erkennung</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Ist diese Funktion aktiv, wird ein Mitglied, das sich nach der
+          eingestellten Uhrzeit auf „Anwesend" setzt, automatisch als „zu spät"
+          erfasst. Die Uhrzeit gilt für die deutsche Zeitzone (MEZ/MESZ).
+          Manuelles Übersteuern per Doppeltipp + Admin-PIN bleibt unberührt –
+          dabei lässt sich auch nach der Schwellenzeit „Anwesend" setzen.
+        </p>
+
+        <label className="flex items-center gap-3 mb-4 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={lateEnabled}
+            onChange={(e) => setLateEnabled(e.target.checked)}
+            className="w-5 h-5 accent-bni-red"
+          />
+          <span className="font-medium">Funktion aktivieren</span>
+        </label>
+
+        <div className="flex items-center gap-3">
+          <label className="font-medium text-sm">Schwellenzeit:</label>
+          <input
+            type="time"
+            value={lateTime}
+            onChange={(e) => setLateTime(e.target.value)}
+            disabled={!lateEnabled}
+            className="p-2 rounded-lg border-2 border-gray-300 focus:border-bni-red focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        <button
+          onClick={handleSaveLate}
+          className={`mt-4 px-6 py-3 rounded-xl text-white font-bold transition-all ${
+            lateSaved ? "bg-green-500" : "bg-bni-red"
+          }`}
+        >
+          {lateSaved ? "Gespeichert ✓" : "Speichern"}
         </button>
       </div>
     </div>

@@ -1,4 +1,9 @@
-export type AttendanceStatus = "PRESENT" | "REPRESENTED" | "ABSENT";
+export type AttendanceStatus =
+  | "PRESENT"
+  | "REPRESENTED"
+  | "ABSENT"
+  | "LATE"
+  | "MEDICAL_ABSENT";
 
 export interface Member {
   id: string;

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { kioskFetch, getKioskToken } from "@/lib/kiosk-api";
+import { getBerlinMinutesNow, parseTimeToMinutes, formatBerlinTime } from "@/lib/time";
 import type {
   Member,
   MemberAttendance,
@@ -37,6 +38,13 @@ export default function CheckInPage() {
   const [resetMemberId, setResetMemberId] = useState<string | null>(null);
   const [resetPin, setResetPin] = useState("");
   const [resetError, setResetError] = useState("");
+  // Status, der nach der Unterschrift gespeichert wird (PRESENT oder LATE)
+  const [pendingStatus, setPendingStatus] = useState<AttendanceStatus>("PRESENT");
+  // Automatische "zu spät"-Erkennung (Admin-Einstellung)
+  const [lateThresholdEnabled, setLateThresholdEnabled] = useState(false);
+  const [lateThresholdTime, setLateThresholdTime] = useState("");
+  // Mitglied, das per Admin-PIN zurückgesetzt wurde: nächster Check-in ohne Auto-"zu spät"
+  const [adminOverrideMemberId, setAdminOverrideMemberId] = useState<string | null>(null);
 
   const canWrite = kioskMode === "kiosk" || kioskMode === "open";
 
@@ -113,14 +121,18 @@ export default function CheckInPage() {
       if (guestAttData) setGuestAttendances(guestAttData as any);
     }
 
-    // Disclaimer laden
+    // Einstellungen laden (Disclaimer + automatische "zu spät"-Erkennung)
     const { data: settingsData } = await supabase
       .from("settings")
-      .select("value")
-      .eq("key", "disclaimer_text")
-      .single();
+      .select("key, value")
+      .in("key", ["disclaimer_text", "late_threshold_enabled", "late_threshold_time"]);
 
-    if (settingsData) setDisclaimerText(settingsData.value);
+    if (settingsData) {
+      const map = Object.fromEntries(settingsData.map((s) => [s.key, s.value]));
+      if (map.disclaimer_text !== undefined) setDisclaimerText(map.disclaimer_text);
+      setLateThresholdEnabled(map.late_threshold_enabled === "true");
+      setLateThresholdTime(map.late_threshold_time ?? "");
+    }
 
     setLoading(false);
   }, [canWrite]);
@@ -153,8 +165,12 @@ export default function CheckInPage() {
     switch (att.status) {
       case "PRESENT":
         return "bg-green-50 border-green-500 text-green-800";
+      case "LATE":
+        return "bg-orange-50 border-orange-500 text-orange-800";
       case "REPRESENTED":
         return "bg-yellow-50 border-yellow-500 text-yellow-800";
+      case "MEDICAL_ABSENT":
+        return "bg-blue-50 border-blue-500 text-blue-800";
       case "ABSENT":
         return "bg-red-50 border-red-500 text-red-800";
     }
@@ -163,11 +179,17 @@ export default function CheckInPage() {
   const getStatusLabel = (memberId: string) => {
     const att = getAttendance(memberId);
     if (!att) return "";
+    // Check-in-Uhrzeit (Europe/Berlin) bei anwesenden / verspäteten Personen
+    const time = formatBerlinTime(att.created_at);
     switch (att.status) {
       case "PRESENT":
-        return "Anwesend ✓";
+        return time ? `Anwesend ✓ · ${time}` : "Anwesend ✓";
+      case "LATE":
+        return time ? `Zu spät · ${time}` : "Zu spät";
       case "REPRESENTED":
         return `Vertreten: ${att.represented_by}`;
+      case "MEDICAL_ABSENT":
+        return "Medizinisch abwesend";
       case "ABSENT":
         return "Abwesend";
     }
@@ -181,16 +203,32 @@ export default function CheckInPage() {
     setShowStatusModal(true);
   };
 
+  // Prüft, ob ein "Anwesend"-Check-in nach der Schwellenzeit automatisch
+  // als "zu spät" gewertet wird. Greift NICHT, wenn ein Admin das Mitglied
+  // zuvor per PIN zurückgesetzt hat (manuelles Übersteuern bleibt möglich).
+  const shouldAutoMarkLate = (memberId: string) => {
+    if (adminOverrideMemberId === memberId) return false;
+    if (!lateThresholdEnabled) return false;
+    const threshold = parseTimeToMinutes(lateThresholdTime);
+    if (threshold === null) return false;
+    return getBerlinMinutesNow() >= threshold;
+  };
+
   const handleStatusSelect = async (status: AttendanceStatus, representedBy?: string) => {
     if (!meeting || !selectedMember) return;
 
-    if (status === "PRESENT") {
+    // "Anwesend" und "Zu spät" benötigen eine Unterschrift.
+    if (status === "PRESENT" || status === "LATE") {
+      // "Anwesend" nach der Schwellenzeit automatisch in "zu spät" umwandeln
+      const resolved =
+        status === "PRESENT" && shouldAutoMarkLate(selectedMember.id) ? "LATE" : status;
+      setPendingStatus(resolved);
       setShowStatusModal(false);
       setShowSignatureModal(true);
       return;
     }
 
-    // Vertreten oder Abwesend: über API speichern
+    // Vertreten, abwesend oder medizinisch abwesend: ohne Unterschrift speichern
     await kioskFetch("/api/attendance/member", {
       method: "POST",
       body: JSON.stringify({
@@ -203,6 +241,7 @@ export default function CheckInPage() {
 
     setShowStatusModal(false);
     setSelectedMember(null);
+    setAdminOverrideMemberId(null);
     loadData();
   };
 
@@ -214,7 +253,7 @@ export default function CheckInPage() {
       body: JSON.stringify({
         meeting_id: meeting.id,
         member_id: selectedMember.id,
-        status: "PRESENT",
+        status: pendingStatus,
         signature_data: signatureData,
         disclaimer_accepted: true,
         disclaimer_accepted_at: new Date().toISOString(),
@@ -223,6 +262,8 @@ export default function CheckInPage() {
 
     setShowSignatureModal(false);
     setSelectedMember(null);
+    setPendingStatus("PRESENT");
+    setAdminOverrideMemberId(null);
     loadData();
   };
 
@@ -310,6 +351,9 @@ export default function CheckInPage() {
         setResetError(data.error || "Fehler beim Zurücksetzen");
         return;
       }
+      // Admin hat per PIN zurückgesetzt: nächster Check-in dieses Mitglieds
+      // wird NICHT automatisch als "zu spät" gewertet (manuelles Übersteuern).
+      setAdminOverrideMemberId(resetMemberId);
       setResetMemberId(null);
       setResetPin("");
       setResetError("");
