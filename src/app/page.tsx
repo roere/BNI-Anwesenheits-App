@@ -26,25 +26,33 @@ export default function CheckInPage() {
     (GuestAttendance & { guest: Guest })[]
   >([]);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [disclaimerText, setDisclaimerText] = useState("");
+  // Getrennte Disclaimer-Texte für Mitglieder und Gäste (Vertreter zählen als Gast)
+  const [disclaimerTextMembers, setDisclaimerTextMembers] = useState("");
+  const [disclaimerTextGuests, setDisclaimerTextGuests] = useState("");
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [showGuestModal, setShowGuestModal] = useState(false);
   const [signingGuest, setSigningGuest] = useState<Guest | null>(null);
   const [signingGuestAttendanceId, setSigningGuestAttendanceId] = useState<string | null>(null);
+  // Gast, für den die Auswahl Einchecken/Abwesend angezeigt wird
+  const [guestChoice, setGuestChoice] = useState<(GuestAttendance & { guest: Guest }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [kioskMode, setKioskMode] = useState<KioskMode>("loading");
   const [resetMemberId, setResetMemberId] = useState<string | null>(null);
   const [resetPin, setResetPin] = useState("");
   const [resetError, setResetError] = useState("");
-  // Status, der nach der Unterschrift gespeichert wird (PRESENT oder LATE)
+  // Status, der nach der Unterschrift gespeichert wird (PRESENT, LATE oder REPRESENTED)
   const [pendingStatus, setPendingStatus] = useState<AttendanceStatus>("PRESENT");
+  // Name des Vertreters, der nach der Unterschrift gespeichert wird
+  const [pendingRepresentedBy, setPendingRepresentedBy] = useState<string | null>(null);
   // Automatische "zu spät"-Erkennung (Admin-Einstellung)
   const [lateThresholdEnabled, setLateThresholdEnabled] = useState(false);
   const [lateThresholdTime, setLateThresholdTime] = useState("");
   // Mitglied, das per Admin-PIN zurückgesetzt wurde: nächster Check-in ohne Auto-"zu spät"
   const [adminOverrideMemberId, setAdminOverrideMemberId] = useState<string | null>(null);
+  // Aktionsmenü (Doppeltipp): "zu spät" umschalten / zurücksetzen
+  const [actionMenuMember, setActionMenuMember] = useState<Member | null>(null);
 
   const canWrite = kioskMode === "kiosk" || kioskMode === "open";
 
@@ -121,15 +129,22 @@ export default function CheckInPage() {
       if (guestAttData) setGuestAttendances(guestAttData as any);
     }
 
-    // Einstellungen laden (Disclaimer + automatische "zu spät"-Erkennung)
+    // Einstellungen laden (Disclaimer Mitglieder/Gäste + automatische "zu spät"-Erkennung)
     const { data: settingsData } = await supabase
       .from("settings")
       .select("key, value")
-      .in("key", ["disclaimer_text", "late_threshold_enabled", "late_threshold_time"]);
+      .in("key", [
+        "disclaimer_text",
+        "disclaimer_text_guests",
+        "late_threshold_enabled",
+        "late_threshold_time",
+      ]);
 
     if (settingsData) {
       const map = Object.fromEntries(settingsData.map((s) => [s.key, s.value]));
-      if (map.disclaimer_text !== undefined) setDisclaimerText(map.disclaimer_text);
+      if (map.disclaimer_text !== undefined) setDisclaimerTextMembers(map.disclaimer_text);
+      // Fallback auf den Mitglieder-Disclaimer, falls der Gäste-Text noch nicht gepflegt ist
+      setDisclaimerTextGuests(map.disclaimer_text_guests ?? map.disclaimer_text ?? "");
       setLateThresholdEnabled(map.late_threshold_enabled === "true");
       setLateThresholdTime(map.late_threshold_time ?? "");
     }
@@ -164,11 +179,14 @@ export default function CheckInPage() {
     if (!att) return "bg-gray-100 border-gray-300 text-bni-gray";
     switch (att.status) {
       case "PRESENT":
-        return "bg-green-50 border-green-500 text-green-800";
+      // "Zu spät" wird wie "anwesend" dargestellt; nur die Uhrzeit ist rot
       case "LATE":
-        return "bg-orange-50 border-orange-500 text-orange-800";
+        return "bg-green-50 border-green-500 text-green-800";
       case "REPRESENTED":
-        return "bg-yellow-50 border-yellow-500 text-yellow-800";
+        // Vorausgefüllter Vertreter ohne Unterschrift: Bestätigung ausstehend
+        return att.signature_data
+          ? "bg-yellow-50 border-yellow-500 text-yellow-800"
+          : "bg-amber-50 border-amber-400 border-dashed text-amber-700";
       case "MEDICAL_ABSENT":
         return "bg-blue-50 border-blue-500 text-blue-800";
       case "ABSENT":
@@ -178,16 +196,29 @@ export default function CheckInPage() {
 
   const getStatusLabel = (memberId: string) => {
     const att = getAttendance(memberId);
-    if (!att) return "";
+    if (!att) return null;
     // Check-in-Uhrzeit (Europe/Berlin) bei anwesenden / verspäteten Personen
     const time = formatBerlinTime(att.created_at);
     switch (att.status) {
       case "PRESENT":
-        return time ? `Anwesend ✓ · ${time}` : "Anwesend ✓";
+        return <>Anwesend ✓{time && <> · {time}</>}</>;
       case "LATE":
-        return time ? `Zu spät · ${time}` : "Zu spät";
+        // wie "anwesend", aber die Uhrzeit signalisiert die Verspätung in Rot
+        return (
+          <>
+            Anwesend ✓
+            {time && (
+              <>
+                {" · "}
+                <span className="text-red-600 font-semibold">{time}</span>
+              </>
+            )}
+          </>
+        );
       case "REPRESENTED":
-        return `Vertreten: ${att.represented_by}`;
+        return att.signature_data
+          ? `Vertreten: ${att.represented_by}`
+          : `Vertretung ausstehend: ${att.represented_by} – zum Bestätigen tippen`;
       case "MEDICAL_ABSENT":
         return "Medizinisch abwesend";
       case "ABSENT":
@@ -198,9 +229,45 @@ export default function CheckInPage() {
   const handleMemberClick = (member: Member) => {
     if (!canWrite) return;
     const existing = getAttendance(member.id);
-    if (existing) return;
+    if (existing) {
+      // Vorausgefüllter Vertreter ohne Unterschrift → Bestätigung durch den Vertreter
+      if (existing.status === "REPRESENTED" && !existing.signature_data) {
+        setSelectedMember(member);
+        setPendingStatus("REPRESENTED");
+        setPendingRepresentedBy(existing.represented_by);
+        setShowSignatureModal(true);
+      }
+      return;
+    }
     setSelectedMember(member);
     setShowStatusModal(true);
+  };
+
+  // Doppeltipp öffnet das Aktionsmenü (nur bei bereits erfasstem Mitglied)
+  const handleMemberDoubleClick = (member: Member) => {
+    if (!canWrite) return;
+    if (!getAttendance(member.id)) return;
+    setActionMenuMember(member);
+  };
+
+  // "Anwesend" <-> "Zu spät" umschalten (ohne PIN, Unterschrift bleibt erhalten)
+  const handleToggleLate = async (member: Member, toLate: boolean) => {
+    const att = getAttendance(member.id);
+    if (!meeting || !att) return;
+    setActionMenuMember(null);
+    await kioskFetch("/api/attendance/member", {
+      method: "POST",
+      body: JSON.stringify({
+        meeting_id: meeting.id,
+        member_id: member.id,
+        status: toLate ? "LATE" : "PRESENT",
+        represented_by: att.represented_by,
+        signature_data: att.signature_data,
+        disclaimer_accepted: att.disclaimer_accepted,
+        disclaimer_accepted_at: att.disclaimer_accepted_at,
+      }),
+    });
+    loadData();
   };
 
   // Prüft, ob ein "Anwesend"-Check-in nach der Schwellenzeit automatisch
@@ -217,25 +284,36 @@ export default function CheckInPage() {
   const handleStatusSelect = async (status: AttendanceStatus, representedBy?: string) => {
     if (!meeting || !selectedMember) return;
 
-    // "Anwesend" und "Zu spät" benötigen eine Unterschrift.
+    // "Anwesend" und "Zu spät" benötigen eine Unterschrift (Mitglieder-Disclaimer).
     if (status === "PRESENT" || status === "LATE") {
       // "Anwesend" nach der Schwellenzeit automatisch in "zu spät" umwandeln
       const resolved =
         status === "PRESENT" && shouldAutoMarkLate(selectedMember.id) ? "LATE" : status;
       setPendingStatus(resolved);
+      setPendingRepresentedBy(null);
       setShowStatusModal(false);
       setShowSignatureModal(true);
       return;
     }
 
-    // Vertreten, abwesend oder medizinisch abwesend: ohne Unterschrift speichern
+    // Vertreter werden wie ein Gast behandelt: Unterschrift + Gäste-Disclaimer.
+    // Es bleibt der EINE REPRESENTED-Datensatz des Mitglieds (keine Doppelzählung).
+    if (status === "REPRESENTED") {
+      setPendingStatus("REPRESENTED");
+      setPendingRepresentedBy(representedBy || null);
+      setShowStatusModal(false);
+      setShowSignatureModal(true);
+      return;
+    }
+
+    // Abwesend oder medizinisch abwesend: ohne Unterschrift speichern
     await kioskFetch("/api/attendance/member", {
       method: "POST",
       body: JSON.stringify({
         meeting_id: meeting.id,
         member_id: selectedMember.id,
         status,
-        represented_by: representedBy || null,
+        represented_by: null,
       }),
     });
 
@@ -254,6 +332,7 @@ export default function CheckInPage() {
         meeting_id: meeting.id,
         member_id: selectedMember.id,
         status: pendingStatus,
+        represented_by: pendingRepresentedBy,
         signature_data: signatureData,
         disclaimer_accepted: true,
         disclaimer_accepted_at: new Date().toISOString(),
@@ -263,6 +342,7 @@ export default function CheckInPage() {
     setShowSignatureModal(false);
     setSelectedMember(null);
     setPendingStatus("PRESENT");
+    setPendingRepresentedBy(null);
     setAdminOverrideMemberId(null);
     loadData();
   };
@@ -307,10 +387,27 @@ export default function CheckInPage() {
 
   const handlePendingGuestClick = (ga: GuestAttendance & { guest: Guest }) => {
     if (!canWrite) return;
+    setGuestChoice(ga);
+  };
+
+  const handleGuestCheckin = (ga: GuestAttendance & { guest: Guest }) => {
+    setGuestChoice(null);
     setSigningGuest(ga.guest);
     setSigningGuestAttendanceId(ga.id);
     setSelectedMember(null);
     setShowSignatureModal(true);
+  };
+
+  const handleGuestAbsent = async (
+    ga: GuestAttendance & { guest: Guest },
+    absent: boolean
+  ) => {
+    setGuestChoice(null);
+    await kioskFetch("/api/attendance/guest", {
+      method: "PATCH",
+      body: JSON.stringify({ attendance_id: ga.id, absent }),
+    });
+    loadData();
   };
 
   const handleGuestAdded = (guest: Guest) => {
@@ -441,7 +538,7 @@ export default function CheckInPage() {
               <button
                 key={member.id}
                 onClick={() => handleMemberClick(member)}
-                onDoubleClick={() => handleResetRequest(member.id)}
+                onDoubleClick={() => handleMemberDoubleClick(member)}
                 disabled={!canWrite}
                 className={`p-3 sm:p-4 rounded-xl border-2 text-left transition-all overflow-hidden ${
                   canWrite ? "active:scale-95" : "cursor-default"
@@ -465,7 +562,8 @@ export default function CheckInPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-bni-gray">
-              Gäste ({guestAttendances.filter((ga) => ga.signature_data).length}/{guestAttendances.length})
+              Gäste ({guestAttendances.filter((ga) => ga.signature_data).length}/
+              {guestAttendances.filter((ga) => !ga.absent).length})
             </h2>
             {canWrite && (
               <button
@@ -480,7 +578,7 @@ export default function CheckInPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
               {/* Ausstehende Gäste (vorausgefüllt, noch nicht eingecheckt) */}
               {guestAttendances
-                .filter((ga) => !ga.signature_data)
+                .filter((ga) => !ga.signature_data && !ga.absent)
                 .map((ga) => (
                   <button
                     key={ga.id}
@@ -497,6 +595,25 @@ export default function CheckInPage() {
                     <p className="text-xs sm:text-sm font-medium mt-1 text-gray-500">
                       Noch nicht eingecheckt
                     </p>
+                  </button>
+                ))}
+              {/* Abwesende Gäste */}
+              {guestAttendances
+                .filter((ga) => ga.absent && !ga.signature_data)
+                .map((ga) => (
+                  <button
+                    key={ga.id}
+                    onClick={() => handlePendingGuestClick(ga)}
+                    disabled={!canWrite}
+                    className={`p-3 sm:p-4 rounded-xl border-2 bg-red-50 border-red-400 text-red-800 text-left overflow-hidden transition-all ${
+                      canWrite ? "active:scale-95" : "cursor-default"
+                    }`}
+                  >
+                    <p className="font-bold text-sm sm:text-lg truncate">{ga.guest?.name}</p>
+                    {ga.guest?.firma && (
+                      <p className="text-xs sm:text-sm opacity-70 truncate">{ga.guest.firma}</p>
+                    )}
+                    <p className="text-xs sm:text-sm font-medium mt-1 truncate">Abwesend</p>
                   </button>
                 ))}
               {/* Eingecheckte Gäste */}
@@ -546,8 +663,19 @@ export default function CheckInPage() {
 
       {showSignatureModal && (selectedMember || signingGuest) && (
         <SignatureModal
-          name={selectedMember?.name || signingGuest?.name || ""}
-          disclaimerText={disclaimerText}
+          name={
+            signingGuest
+              ? signingGuest.name
+              : pendingStatus === "REPRESENTED"
+              ? `${pendingRepresentedBy} (Vertretung für ${selectedMember?.name})`
+              : selectedMember?.name || ""
+          }
+          // Vertreter unterschreiben mit dem Gäste-Disclaimer (wie ein Gast)
+          disclaimerText={
+            signingGuest || pendingStatus === "REPRESENTED"
+              ? disclaimerTextGuests
+              : disclaimerTextMembers
+          }
           isGuest={!!signingGuest}
           needsBreakfast={
             signingGuest ? signingGuest.total_visits >= 1 : false
@@ -563,6 +691,8 @@ export default function CheckInPage() {
             setSelectedMember(null);
             setSigningGuest(null);
             setSigningGuestAttendanceId(null);
+            setPendingStatus("PRESENT");
+            setPendingRepresentedBy(null);
           }}
         />
       )}
@@ -574,6 +704,108 @@ export default function CheckInPage() {
           onClose={() => setShowGuestModal(false)}
         />
       )}
+
+      {/* Auswahl bei vorausgefülltem Gast: Einchecken oder Abwesend */}
+      {guestChoice && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-4 sm:p-6 border-b">
+              <h2 className="text-xl sm:text-2xl font-bold text-bni-gray truncate">
+                {guestChoice.guest?.name}
+              </h2>
+              {guestChoice.guest?.firma && (
+                <p className="text-bni-gray opacity-70 text-sm sm:text-base truncate">
+                  {guestChoice.guest.firma}
+                </p>
+              )}
+            </div>
+            <div className="p-4 sm:p-6 space-y-3">
+              <button
+                onClick={() => handleGuestCheckin(guestChoice)}
+                className="w-full p-3 sm:p-4 rounded-xl bg-green-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
+              >
+                Einchecken
+              </button>
+              {guestChoice.absent ? (
+                <button
+                  onClick={() => handleGuestAbsent(guestChoice, false)}
+                  className="w-full p-3 sm:p-4 rounded-xl bg-gray-200 text-bni-gray font-bold text-lg sm:text-xl active:scale-95 transition-all"
+                >
+                  Abwesend aufheben
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleGuestAbsent(guestChoice, true)}
+                  className="w-full p-3 sm:p-4 rounded-xl bg-red-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
+                >
+                  Abwesend
+                </button>
+              )}
+            </div>
+            <div className="p-3 sm:p-4 border-t">
+              <button
+                onClick={() => setGuestChoice(null)}
+                className="w-full p-3 rounded-xl text-bni-gray font-medium hover:bg-gray-100 transition-colors text-sm sm:text-base"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Aktionsmenü (Doppeltipp auf eine Mitglieder-Kachel) */}
+      {actionMenuMember && (() => {
+        const att = getAttendance(actionMenuMember.id);
+        const isPresentOrLate = att?.status === "PRESENT" || att?.status === "LATE";
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 sm:p-4">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-md">
+              <div className="p-4 sm:p-6 border-b">
+                <h2 className="text-xl sm:text-2xl font-bold text-bni-gray truncate">
+                  {actionMenuMember.name}
+                </h2>
+              </div>
+              <div className="p-4 sm:p-6 space-y-3">
+                {isPresentOrLate && att?.status === "PRESENT" && (
+                  <button
+                    onClick={() => handleToggleLate(actionMenuMember, true)}
+                    className="w-full p-3 sm:p-4 rounded-xl bg-green-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
+                  >
+                    Als zu spät markieren
+                  </button>
+                )}
+                {isPresentOrLate && att?.status === "LATE" && (
+                  <button
+                    onClick={() => handleToggleLate(actionMenuMember, false)}
+                    className="w-full p-3 sm:p-4 rounded-xl bg-green-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
+                  >
+                    Als anwesend markieren
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const m = actionMenuMember;
+                    setActionMenuMember(null);
+                    handleResetRequest(m.id);
+                  }}
+                  className="w-full p-3 sm:p-4 rounded-xl bg-red-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
+                >
+                  Zurücksetzen (Admin-PIN)
+                </button>
+              </div>
+              <div className="p-3 sm:p-4 border-t">
+                <button
+                  onClick={() => setActionMenuMember(null)}
+                  className="w-full p-3 rounded-xl text-bni-gray font-medium hover:bg-gray-100 transition-colors text-sm sm:text-base"
+                >
+                  Abbrechen
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* PIN-Dialog zum Zurücksetzen */}
       {resetMemberId && (

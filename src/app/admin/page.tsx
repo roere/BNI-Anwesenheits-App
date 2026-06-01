@@ -4,13 +4,25 @@ import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { adminFetch } from "@/lib/admin-api";
 import { formatBerlinTime } from "@/lib/time";
+import { matchMemberId } from "@/lib/match-member";
 import type {
   Member,
   Guest,
   Meeting,
   MemberAttendance,
   GuestAttendance,
+  ParsedBesucherliste,
 } from "@/lib/types";
+
+// Zeile in der Import-Vorschau (aus der PDF geparst, vom Admin editierbar)
+type ImportRow = {
+  name: string;
+  firma: string;
+  type: "guest" | "representative";
+  representedFor: string | null;
+  memberId: string; // bei Vertretern: zugeordnetes Mitglied
+  include: boolean;
+};
 
 type Tab = "members" | "guests" | "meetings" | "stats" | "settings" | "kiosk";
 
@@ -112,7 +124,7 @@ export default function AdminPage() {
       <div className="max-w-6xl mx-auto p-6">
         {activeTab === "members" && <MembersTab pin={storedPin} />}
         {activeTab === "guests" && <GuestsTab pin={storedPin} />}
-        {activeTab === "meetings" && <MeetingsTab />}
+        {activeTab === "meetings" && <MeetingsTab pin={storedPin} />}
         {activeTab === "stats" && <StatsTab />}
         {activeTab === "settings" && <SettingsTab pin={storedPin} />}
         {activeTab === "kiosk" && <KioskTab pin={storedPin} />}
@@ -329,17 +341,25 @@ function MembersTab({ pin }: { pin: string }) {
 // ==================== Gäste-Tab ====================
 function GuestsTab({ pin }: { pin: string }) {
   const [guests, setGuests] = useState<Guest[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [showAssignForm, setShowAssignForm] = useState(false);
   const [assignGuestName, setAssignGuestName] = useState("");
   const [assignGuestFirma, setAssignGuestFirma] = useState("");
   const [assignMeetingDate, setAssignMeetingDate] = useState("");
 
+  // PDF-Import (Besucher- und Vertreterliste)
+  const [importRows, setImportRows] = useState<ImportRow[] | null>(null);
+  const [importDate, setImportDate] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
+
   const loadData = useCallback(async () => {
-    const { data: guestsData } = await supabase
-      .from("guests")
-      .select("*")
-      .order("name");
+    const [{ data: guestsData }, { data: membersData }] = await Promise.all([
+      supabase.from("guests").select("*").order("name"),
+      supabase.from("members").select("*").eq("active", true).order("name"),
+    ]);
     if (guestsData) setGuests(guestsData);
+    if (membersData) setMembers(membersData);
   }, []);
 
   useEffect(() => {
@@ -360,6 +380,98 @@ function GuestsTab({ pin }: { pin: string }) {
     setAssignGuestFirma("");
     setAssignMeetingDate("");
     setShowAssignForm(false);
+    loadData();
+  };
+
+  // PDF hochladen → parsen → Vorschau aufbauen (noch kein Schreibvorgang)
+  const handleParseFile = async (file: File) => {
+    setImportBusy(true);
+    setImportMsg("");
+    setImportRows(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/admin/guests/parse", {
+        method: "POST",
+        headers: { "X-Admin-PIN": pin },
+        body: form,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Fehler ${res.status}`);
+      }
+      const parsed: ParsedBesucherliste = await res.json();
+      const rows: ImportRow[] = parsed.entries.map((e) => ({
+        name: e.name,
+        firma: e.firma,
+        type: e.type,
+        representedFor: e.representedFor,
+        memberId:
+          e.type === "representative" ? matchMemberId(e.representedFor, members) : "",
+        include: true,
+      }));
+      setImportRows(rows);
+      setImportDate(parsed.eventDate || "");
+      if (rows.length === 0) setImportMsg("Keine Einträge in der PDF erkannt.");
+    } catch (err) {
+      setImportMsg(err instanceof Error ? err.message : "Import fehlgeschlagen");
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const updateRow = (idx: number, patch: Partial<ImportRow>) => {
+    setImportRows((rows) =>
+      rows ? rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)) : rows
+    );
+  };
+
+  const handleConfirmImport = async () => {
+    if (!importRows || !importDate) return;
+    setImportBusy(true);
+    setImportMsg("");
+    const selected = importRows.filter((r) => r.include && r.name.trim());
+    let ok = 0;
+    const errors: string[] = [];
+
+    for (const row of selected) {
+      try {
+        if (row.type === "representative") {
+          if (!row.memberId) {
+            errors.push(`${row.name}: kein Mitglied zugeordnet`);
+            continue;
+          }
+          await adminFetch("/api/admin/representatives/assign", pin, {
+            method: "POST",
+            body: JSON.stringify({
+              memberId: row.memberId,
+              representativeName: row.name.trim(),
+              meetingDate: importDate,
+            }),
+          });
+        } else {
+          await adminFetch("/api/admin/guests/assign", pin, {
+            method: "POST",
+            body: JSON.stringify({
+              guestName: row.name.trim(),
+              guestFirma: row.firma.trim(),
+              meetingDate: importDate,
+            }),
+          });
+        }
+        ok++;
+      } catch (err) {
+        errors.push(`${row.name}: ${err instanceof Error ? err.message : "Fehler"}`);
+      }
+    }
+
+    setImportBusy(false);
+    setImportRows(null);
+    setImportMsg(
+      `${ok} Eintrag/Einträge importiert${
+        errors.length ? ` · ${errors.length} Fehler: ${errors.join("; ")}` : ""
+      }`
+    );
     loadData();
   };
 
@@ -410,6 +522,143 @@ function GuestsTab({ pin }: { pin: string }) {
         </div>
       )}
 
+      {/* PDF-Import: Besucher- und Vertreterliste */}
+      <div className="bg-white rounded-xl p-4 mb-4">
+        <h3 className="font-bold text-lg mb-1">Aus PDF importieren</h3>
+        <p className="text-sm text-gray-500 mb-3">
+          BNI-Besucher- und Vertreterliste hochladen. Gäste und Vertreter werden
+          erkannt, in der Vorschau geprüft und dann für den Termin vorausgefüllt.
+        </p>
+        <input
+          type="file"
+          accept="application/pdf,.pdf"
+          disabled={importBusy}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleParseFile(f);
+            e.target.value = "";
+          }}
+          className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-bni-red file:text-white file:font-medium"
+        />
+        {importBusy && <p className="text-sm text-gray-500 mt-3">Wird verarbeitet…</p>}
+        {importMsg && (
+          <p className="text-sm mt-3 text-bni-gray bg-gray-50 rounded-lg p-3">{importMsg}</p>
+        )}
+
+        {importRows && importRows.length > 0 && (
+          <div className="mt-4">
+            <div className="flex flex-wrap items-center gap-3 mb-3">
+              <label className="font-medium text-sm">Termin:</label>
+              <input
+                type="date"
+                value={importDate}
+                onChange={(e) => setImportDate(e.target.value)}
+                className="p-2 rounded-lg border-2 border-gray-300 focus:border-bni-red focus:outline-none"
+              />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="p-2 text-center">Import</th>
+                    <th className="p-2 text-left">Name</th>
+                    <th className="p-2 text-left">Firma</th>
+                    <th className="p-2 text-left">Typ</th>
+                    <th className="p-2 text-left">Vertreten für (Mitglied)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importRows.map((row, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="p-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={row.include}
+                          onChange={(e) => updateRow(idx, { include: e.target.checked })}
+                          className="w-5 h-5 accent-bni-red"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.name}
+                          onChange={(e) => updateRow(idx, { name: e.target.value })}
+                          className="w-full p-1.5 rounded border border-gray-300 focus:border-bni-red focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={row.firma}
+                          onChange={(e) => updateRow(idx, { firma: e.target.value })}
+                          className="w-full p-1.5 rounded border border-gray-300 focus:border-bni-red focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <select
+                          value={row.type}
+                          onChange={(e) =>
+                            updateRow(idx, {
+                              type: e.target.value as "guest" | "representative",
+                            })
+                          }
+                          className="p-1.5 rounded border border-gray-300 focus:border-bni-red focus:outline-none"
+                        >
+                          <option value="guest">Gast</option>
+                          <option value="representative">Vertreter</option>
+                        </select>
+                      </td>
+                      <td className="p-2">
+                        {row.type === "representative" ? (
+                          <select
+                            value={row.memberId}
+                            onChange={(e) => updateRow(idx, { memberId: e.target.value })}
+                            className={`w-full p-1.5 rounded border focus:outline-none ${
+                              row.memberId
+                                ? "border-gray-300 focus:border-bni-red"
+                                : "border-red-400"
+                            }`}
+                          >
+                            <option value="">– Mitglied wählen –</option>
+                            {members.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-gray-400">–</span>
+                        )}
+                        {row.representedFor && (
+                          <span className="block text-xs text-gray-400 mt-0.5">
+                            PDF: „{row.representedFor}"
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center gap-3 mt-4">
+              <button
+                onClick={handleConfirmImport}
+                disabled={importBusy || !importDate}
+                className="bg-green-500 text-white px-6 py-3 rounded-lg font-medium disabled:opacity-50"
+              >
+                {importBusy ? "Importiere…" : "Importieren"}
+              </button>
+              <button
+                onClick={() => setImportRows(null)}
+                className="px-6 py-3 rounded-lg font-medium text-bni-gray hover:bg-gray-100"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="bg-white rounded-xl overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-50">
@@ -439,11 +688,19 @@ function GuestsTab({ pin }: { pin: string }) {
 }
 
 // ==================== Meetings-Tab ====================
-function MeetingsTab() {
+function MeetingsTab({ pin }: { pin: string }) {
   const [meetings, setMeetings] = useState<(Meeting & { memberCount: number; guestCount: number })[]>([]);
   const [selectedMeeting, setSelectedMeeting] = useState<string | null>(null);
   const [attendances, setAttendances] = useState<(MemberAttendance & { member: Member })[]>([]);
   const [guestAttendances, setGuestAttendances] = useState<(GuestAttendance & { guest: Guest })[]>([]);
+
+  const toggleGuestAbsent = async (attendanceId: string, absent: boolean) => {
+    await adminFetch("/api/admin/guests/absent", pin, {
+      method: "POST",
+      body: JSON.stringify({ attendance_id: attendanceId, absent }),
+    });
+    if (selectedMeeting) loadMeetingDetails(selectedMeeting);
+  };
 
   const exportPDF = async () => {
     const meeting = meetings.find((m) => m.id === selectedMeeting);
@@ -739,12 +996,42 @@ function MeetingsTab() {
                 <>
                   <h4 className="font-bold mt-4">Gäste</h4>
                   {guestAttendances.map((ga) => (
-                    <div key={ga.id} className="p-3 rounded-lg bg-blue-50">
-                      <span className="font-medium">{ga.guest?.name}</span>
-                      {ga.guest?.firma && (
-                        <span className="text-sm text-gray-500 ml-2">
-                          ({ga.guest.firma})
+                    <div
+                      key={ga.id}
+                      className={`p-3 rounded-lg flex items-center justify-between gap-3 ${
+                        ga.absent
+                          ? "bg-red-50"
+                          : ga.signature_data
+                          ? "bg-green-50"
+                          : "bg-blue-50"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="font-medium">{ga.guest?.name}</span>
+                        {ga.guest?.firma && (
+                          <span className="text-sm text-gray-500 ml-2">
+                            ({ga.guest.firma})
+                          </span>
+                        )}
+                        <span className="block text-xs mt-0.5 text-gray-500">
+                          {ga.absent
+                            ? "Abwesend"
+                            : ga.signature_data
+                            ? "Eingecheckt"
+                            : "Noch nicht eingecheckt"}
                         </span>
+                      </div>
+                      {!ga.signature_data && (
+                        <button
+                          onClick={() => toggleGuestAbsent(ga.id, !ga.absent)}
+                          className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium ${
+                            ga.absent
+                              ? "bg-gray-200 text-bni-gray"
+                              : "bg-red-500 text-white"
+                          }`}
+                        >
+                          {ga.absent ? "Abwesend aufheben" : "Abwesend"}
+                        </button>
                       )}
                     </div>
                   ))}
@@ -917,6 +1204,9 @@ function StatsTab() {
 function SettingsTab({ pin }: { pin: string }) {
   const [disclaimerText, setDisclaimerText] = useState("");
   const [saved, setSaved] = useState(false);
+  // Getrennter Disclaimer für Gäste (gilt auch für Vertreter)
+  const [disclaimerTextGuests, setDisclaimerTextGuests] = useState("");
+  const [savedGuests, setSavedGuests] = useState(false);
   // Automatische "zu spät"-Erkennung
   const [lateEnabled, setLateEnabled] = useState(false);
   const [lateTime, setLateTime] = useState("07:00");
@@ -929,12 +1219,15 @@ function SettingsTab({ pin }: { pin: string }) {
         .select("key, value")
         .in("key", [
           "disclaimer_text",
+          "disclaimer_text_guests",
           "late_threshold_enabled",
           "late_threshold_time",
         ]);
       if (data) {
         const map = Object.fromEntries(data.map((s) => [s.key, s.value]));
         if (map.disclaimer_text !== undefined) setDisclaimerText(map.disclaimer_text);
+        // Fallback auf den Mitglieder-Text, falls der Gäste-Text noch nicht gepflegt ist
+        setDisclaimerTextGuests(map.disclaimer_text_guests ?? map.disclaimer_text ?? "");
         setLateEnabled(map.late_threshold_enabled === "true");
         if (map.late_threshold_time) setLateTime(map.late_threshold_time);
       }
@@ -949,6 +1242,15 @@ function SettingsTab({ pin }: { pin: string }) {
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveGuests = async () => {
+    await adminFetch("/api/admin/settings", pin, {
+      method: "PUT",
+      body: JSON.stringify({ key: "disclaimer_text_guests", value: disclaimerTextGuests }),
+    });
+    setSavedGuests(true);
+    setTimeout(() => setSavedGuests(false), 2000);
   };
 
   const handleSaveLate = async () => {
@@ -972,10 +1274,10 @@ function SettingsTab({ pin }: { pin: string }) {
       <h2 className="text-xl font-bold mb-4">Einstellungen</h2>
 
       <div className="bg-white rounded-xl p-6">
-        <h3 className="font-bold text-lg mb-3">Disclaimer-Text</h3>
+        <h3 className="font-bold text-lg mb-3">Disclaimer-Text – Mitglieder</h3>
         <p className="text-sm text-gray-500 mb-3">
-          Dieser Text wird vor der Unterschrift angezeigt und muss von allen
-          Teilnehmern bestätigt werden.
+          Dieser Text wird Mitgliedern vor der Unterschrift angezeigt und muss
+          beim Check-in bestätigt werden.
         </p>
         <textarea
           value={disclaimerText}
@@ -990,6 +1292,28 @@ function SettingsTab({ pin }: { pin: string }) {
           }`}
         >
           {saved ? "Gespeichert ✓" : "Speichern"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl p-6 mt-6">
+        <h3 className="font-bold text-lg mb-3">Disclaimer-Text – Gäste &amp; Vertreter</h3>
+        <p className="text-sm text-gray-500 mb-3">
+          Dieser Text wird Gästen sowie Vertretern (bei „Vertreten durch…")
+          vor der Unterschrift angezeigt und muss bestätigt werden.
+        </p>
+        <textarea
+          value={disclaimerTextGuests}
+          onChange={(e) => setDisclaimerTextGuests(e.target.value)}
+          rows={8}
+          className="w-full p-4 rounded-xl border-2 border-gray-300 focus:border-bni-red focus:outline-none resize-y"
+        />
+        <button
+          onClick={handleSaveGuests}
+          className={`mt-4 px-6 py-3 rounded-xl text-white font-bold transition-all ${
+            savedGuests ? "bg-green-500" : "bg-bni-red"
+          }`}
+        >
+          {savedGuests ? "Gespeichert ✓" : "Speichern"}
         </button>
       </div>
 

@@ -78,6 +78,7 @@ export async function PATCH(req: NextRequest) {
     breakfast_paid,
     disclaimer_accepted,
     disclaimer_accepted_at,
+    absent,
   } = body;
 
   if (!attendance_id) {
@@ -86,11 +87,26 @@ export async function PATCH(req: NextRequest) {
 
   const supabase = getSupabaseAdmin();
 
+  // Gast nur auf "abwesend" setzen/zurücksetzen (kein Check-in, kein Besuchszähler)
+  if (absent !== undefined) {
+    const { data, error } = await supabase
+      .from("guest_attendance")
+      .update({ absent: !!absent })
+      .eq("id", attendance_id)
+      .select("*, guest:guests(*)")
+      .single();
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json(data);
+  }
+
   const { data, error } = await supabase
     .from("guest_attendance")
     .update({
       signature_data: signature_data || null,
       breakfast_paid: breakfast_paid || false,
+      absent: false,
       disclaimer_accepted: disclaimer_accepted || false,
       disclaimer_accepted_at: disclaimer_accepted_at || null,
     })

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS guest_attendance (
   guest_id UUID NOT NULL REFERENCES guests(id) ON DELETE CASCADE,
   signature_data TEXT,
   breakfast_paid BOOLEAN NOT NULL DEFAULT false,
+  absent BOOLEAN NOT NULL DEFAULT false,
   disclaimer_accepted BOOLEAN NOT NULL DEFAULT false,
   disclaimer_accepted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -66,6 +67,11 @@ INSERT INTO settings (key, value) VALUES (
 Hiermit versichere ich ausdrücklich, dass ich keine Symptome einer Covid-19-Erkrankung bzw. einer Infektion mit dem Coronavirus verspüre (z.B.: trockener Husten, Fieber, Atemprobleme, Abgeschlagenheit, Halskatzen, Kopf- und Gliederschmerzen, Übelkeit, Durchfall, Schnupfen oder Schüttelfrost, Verlust des Geruch- oder Geschmackssinns) und auch sonst keine Kenntnis einer ansteckenden Krankheit bei mir habe, die durch bloße Berührung oder die Atemwege übertragbar ist, und nach meiner Kenntnis innerhalb der letzten 14 Tage keinen persönlichen Kontakt mit einer Corona-infizierten Person oder einer Person, die unter behördlich angeordneter Quarantäne steht, hatte.
 Mit der Teilnahme an diesem Treffen verpflichten Sie sich zur Einhaltung aller gesetzlich erforderlichen Regeln (z.B.: Mindestabstand, Mundschutz) sowie zur eigenverantwortlichen Einhaltung aller sonst möglichen Schutz- und Hygienemaßnahmen gegenüber anderen Teilnehmern, dies sind z.B.: kein Händeschütteln, keine Umarmungen, keine Berührungen, keine Teilnahme bei Verdacht auf eine Erkrankung, Meldung von Verdachtsfällen auch im Nachhinein, gründliche Händehygiene & Desinfektion.'
 ) ON CONFLICT (key) DO NOTHING;
+
+-- Gäste-/Vertreter-Disclaimer initial mit dem Mitglieder-Text vorbelegen
+INSERT INTO settings (key, value)
+SELECT 'disclaimer_text_guests', value FROM settings WHERE key = 'disclaimer_text'
+ON CONFLICT (key) DO NOTHING;
 
 -- Automatische "zu spät"-Erkennung (ab Uhrzeit, Europe/Berlin / MEZ-MESZ)
 INSERT INTO settings (key, value) VALUES

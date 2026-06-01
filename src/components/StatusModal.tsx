@@ -34,13 +34,6 @@ export default function StatusModal({ member, onSelect, onClose }: StatusModalPr
               </button>
 
               <button
-                onClick={() => onSelect("LATE")}
-                className="w-full p-3 sm:p-4 rounded-xl bg-orange-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
-              >
-                Zu spät
-              </button>
-
-              <button
                 onClick={() => setShowRepresented(true)}
                 className="w-full p-3 sm:p-4 rounded-xl bg-yellow-500 text-white font-bold text-lg sm:text-xl active:scale-95 transition-all"
               >

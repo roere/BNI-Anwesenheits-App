@@ -27,17 +27,22 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = getSupabaseAdmin();
+  // Upsert statt insert: vorausgefüllte Vertreter (REPRESENTED ohne Unterschrift)
+  // werden beim Bestätigen am Kiosk aktualisiert statt am Unique-Constraint zu scheitern.
   const { data, error } = await supabase
     .from("member_attendance")
-    .insert({
-      meeting_id,
-      member_id,
-      status,
-      represented_by: represented_by || null,
-      signature_data: signature_data || null,
-      disclaimer_accepted: disclaimer_accepted || false,
-      disclaimer_accepted_at: disclaimer_accepted_at || null,
-    })
+    .upsert(
+      {
+        meeting_id,
+        member_id,
+        status,
+        represented_by: represented_by || null,
+        signature_data: signature_data || null,
+        disclaimer_accepted: disclaimer_accepted || false,
+        disclaimer_accepted_at: disclaimer_accepted_at || null,
+      },
+      { onConflict: "meeting_id,member_id" }
+    )
     .select()
     .single();
 

@@ -45,9 +45,24 @@ export interface GuestAttendance {
   guest_id: string;
   signature_data: string | null;
   breakfast_paid: boolean;
+  absent: boolean;
   disclaimer_accepted: boolean;
   disclaimer_accepted_at: string | null;
   created_at: string;
+}
+
+// Aus der BNI-Besucher- und Vertreterliste (PDF) geparster Eintrag
+export interface ParsedBesucherEntry {
+  name: string;
+  firma: string;
+  code: string; // B/V-Code aus der Liste (z.B. "BNI", "B", "BNI+V")
+  type: "guest" | "representative";
+  representedFor: string | null; // bei Vertretern: Name des vertretenen Mitglieds
+}
+
+export interface ParsedBesucherliste {
+  eventDate: string | null; // ISO yyyy-mm-dd
+  entries: ParsedBesucherEntry[];
 }
 
 export interface Setting {
