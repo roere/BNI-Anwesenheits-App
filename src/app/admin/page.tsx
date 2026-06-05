@@ -12,6 +12,7 @@ import type {
   MemberAttendance,
   GuestAttendance,
   ParsedBesucherliste,
+  AttendanceStatus,
 } from "@/lib/types";
 
 // Zeile in der Import-Vorschau (aus der PDF geparst, vom Admin editierbar)
@@ -687,6 +688,15 @@ function GuestsTab({ pin }: { pin: string }) {
   );
 }
 
+// Status-Optionen für die nachträgliche Bearbeitung (REPRESENTED braucht Namen)
+const MEMBER_STATUS_OPTIONS: { value: AttendanceStatus; label: string }[] = [
+  { value: "PRESENT", label: "Anwesend" },
+  { value: "LATE", label: "Zu spät" },
+  { value: "MEDICAL_ABSENT", label: "Medizinisch" },
+  { value: "ABSENT", label: "Abwesend" },
+  { value: "REPRESENTED", label: "Vertreten" },
+];
+
 // ==================== Meetings-Tab ====================
 function MeetingsTab({ pin }: { pin: string }) {
   const [meetings, setMeetings] = useState<(Meeting & { memberCount: number; guestCount: number })[]>([]);
@@ -696,6 +706,41 @@ function MeetingsTab({ pin }: { pin: string }) {
   // Treffen-Wochentag-Filter: standardmäßig nur Treffen am konfigurierten Wochentag
   const [meetingWeekday, setMeetingWeekday] = useState(5);
   const [showAllDays, setShowAllDays] = useState(false);
+  // Nachträgliche Bearbeitung: ID der gerade bearbeiteten Mitglieds-Anwesenheit
+  const [editingAttId, setEditingAttId] = useState<string | null>(null);
+  const [editRepName, setEditRepName] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+
+  const updateMemberStatus = async (
+    attendanceId: string,
+    status: AttendanceStatus,
+    representedBy?: string
+  ) => {
+    if (status === "REPRESENTED" && !representedBy?.trim()) {
+      // Vertreter-Name erforderlich – Eingabefeld offen lassen
+      setEditingAttId(attendanceId);
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await adminFetch("/api/admin/attendance/member", pin, {
+        method: "POST",
+        body: JSON.stringify({
+          attendance_id: attendanceId,
+          status,
+          represented_by: representedBy ?? null,
+        }),
+      });
+      setEditingAttId(null);
+      setEditRepName("");
+      if (selectedMeeting) await loadMeetingDetails(selectedMeeting);
+      await loadMeetings();
+    } catch (e) {
+      alert("Speichern fehlgeschlagen: " + (e as Error).message);
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const toggleGuestAbsent = async (attendanceId: string, absent: boolean) => {
     await adminFetch("/api/admin/guests/absent", pin, {
@@ -929,6 +974,8 @@ function MeetingsTab({ pin }: { pin: string }) {
 
   const loadMeetingDetails = async (meetingId: string) => {
     setSelectedMeeting(meetingId);
+    setEditingAttId(null);
+    setEditRepName("");
     const { data: attData } = await supabase
       .from("member_attendance")
       .select("*, member:members(*)")
@@ -1004,7 +1051,7 @@ function MeetingsTab({ pin }: { pin: string }) {
               {attendances.map((a) => (
                 <div
                   key={a.id}
-                  className={`p-3 rounded-lg flex items-center justify-between ${
+                  className={`p-3 rounded-lg ${
                     a.status === "PRESENT"
                       ? "bg-green-50"
                       : a.status === "LATE"
@@ -1016,16 +1063,75 @@ function MeetingsTab({ pin }: { pin: string }) {
                       : "bg-red-50"
                   }`}
                 >
-                  <span className="font-medium">{a.member?.name}</span>
-                  <span className="text-sm">
-                    {a.status === "PRESENT" &&
-                      `Anwesend${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
-                    {a.status === "LATE" &&
-                      `Zu spät${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
-                    {a.status === "REPRESENTED" && `Vertreten: ${a.represented_by}`}
-                    {a.status === "MEDICAL_ABSENT" && "Medizinisch abwesend"}
-                    {a.status === "ABSENT" && "Abwesend"}
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{a.member?.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">
+                        {a.status === "PRESENT" &&
+                          `Anwesend${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
+                        {a.status === "LATE" &&
+                          `Zu spät${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
+                        {a.status === "REPRESENTED" && `Vertreten: ${a.represented_by}`}
+                        {a.status === "MEDICAL_ABSENT" && "Medizinisch abwesend"}
+                        {a.status === "ABSENT" && "Abwesend"}
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (editingAttId === a.id) {
+                            setEditingAttId(null);
+                          } else {
+                            setEditingAttId(a.id);
+                            setEditRepName(a.represented_by ?? "");
+                          }
+                        }}
+                        className="shrink-0 text-xs px-2 py-1 rounded-md bg-white/70 border border-gray-300 text-bni-gray active:scale-95"
+                      >
+                        {editingAttId === a.id ? "Abbrechen" : "Bearbeiten"}
+                      </button>
+                    </div>
+                  </div>
+                  {editingAttId === a.id && (
+                    <div className="mt-3 pt-3 border-t border-black/10">
+                      <div className="flex flex-wrap gap-1.5">
+                        {MEMBER_STATUS_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            disabled={editSaving}
+                            onClick={() => {
+                              if (opt.value === "REPRESENTED") {
+                                // Name-Eingabe abwarten, dann über Speichern bestätigen
+                                return;
+                              }
+                              updateMemberStatus(a.id, opt.value);
+                            }}
+                            className={`text-xs px-3 py-2 rounded-lg font-medium active:scale-95 disabled:opacity-50 ${
+                              a.status === opt.value
+                                ? "bg-bni-red text-white"
+                                : "bg-white border border-gray-300 text-bni-gray"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={editRepName}
+                          onChange={(e) => setEditRepName(e.target.value)}
+                          placeholder="Vertreter-Name (für Vertretung)"
+                          className="flex-1 min-w-0 text-sm p-2 rounded-lg border border-gray-300 focus:border-bni-red focus:outline-none"
+                        />
+                        <button
+                          disabled={editSaving || !editRepName.trim()}
+                          onClick={() => updateMemberStatus(a.id, "REPRESENTED", editRepName)}
+                          className="shrink-0 text-xs px-3 py-2 rounded-lg font-medium bg-yellow-500 text-white active:scale-95 disabled:opacity-40"
+                        >
+                          Als „Vertreten“ speichern
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
               {guestAttendances.length > 0 && (
