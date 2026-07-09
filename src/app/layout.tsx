@@ -8,6 +8,17 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "BNI Anwesenheit",
   description: "Digitale Anwesenheitserfassung für BNI Chapter-Treffen",
+  // Interne Anwendung mit Personendaten – darf nicht in Suchmaschinen landen
+  robots: {
+    index: false,
+    follow: false,
+    nocache: true,
+    googleBot: {
+      index: false,
+      follow: false,
+      noimageindex: true,
+    },
+  },
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
