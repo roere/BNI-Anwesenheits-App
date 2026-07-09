@@ -30,7 +30,8 @@ export const config = {
      * - Login-Seite und Login-API
      * - Next-Interna und statische Assets
      * - PWA-Dateien (manifest, icons, logo), robots.txt, favicon
+     * - Google-Search-Console-Verifizierungsdatei
      */
-    "/((?!login|api/auth/login|_next/|icons/|manifest\\.json|bni-logo\\.svg|robots\\.txt|favicon\\.ico).*)",
+    "/((?!login|api/auth/login|_next/|icons/|manifest\\.json|bni-logo\\.svg|robots\\.txt|favicon\\.ico|google5a521f118e04ac93\\.html).*)",
   ],
 };

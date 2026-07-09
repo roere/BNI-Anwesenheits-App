@@ -1,2 +1,4 @@
 User-agent: *
+Allow: /google5a521f118e04ac93.html
+Allow: /login/google5a521f118e04ac93.html
 Disallow: /
