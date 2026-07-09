@@ -1,6 +1,11 @@
 // Seitenweiter Passwortschutz: Cookie-Token = SHA-256(SITE_PASSWORD).
 // Läuft sowohl im Edge-Runtime (proxy.ts) als auch in Node (API-Routes),
 // daher Web Crypto statt node:crypto.
+//
+// Bewusster Trade-off statt echter Sessions: Das Token ist deterministisch
+// aus dem Passwort abgeleitet, es gibt keine Session-Verwaltung und keine
+// Einzelgeräte-Abmeldung. Ein Wechsel von SITE_PASSWORD invalidiert
+// sämtliche ausgegebenen Cookies auf einen Schlag.
 
 export const SITE_AUTH_COOKIE = "site-auth";
 
