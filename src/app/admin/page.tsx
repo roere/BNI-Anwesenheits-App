@@ -3,7 +3,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { adminFetch } from "@/lib/admin-api";
-import { formatBerlinTime, getWeekday, WEEKDAY_NAMES } from "@/lib/time";
+import {
+  formatBerlinTime,
+  getWeekday,
+  getBerlinTodayISO,
+  lastMeetingDate,
+  WEEKDAY_NAMES,
+} from "@/lib/time";
+import { buildAttendanceRows } from "@/lib/attendance-rows";
 import { matchMemberId } from "@/lib/match-member";
 import type {
   Member,
@@ -706,39 +713,66 @@ function MeetingsTab({ pin }: { pin: string }) {
   // Treffen-Wochentag-Filter: standardmäßig nur Treffen am konfigurierten Wochentag
   const [meetingWeekday, setMeetingWeekday] = useState(5);
   const [showAllDays, setShowAllDays] = useState(false);
-  // Nachträgliche Bearbeitung: ID der gerade bearbeiteten Mitglieds-Anwesenheit
-  const [editingAttId, setEditingAttId] = useState<string | null>(null);
+  // Aktive Mitglieder, damit auch nicht erfasste Mitglieder nachgetragen werden können
+  const [activeMembers, setActiveMembers] = useState<Member[]>([]);
+  // Nachträgliche Bearbeitung: ID des gerade bearbeiteten Mitglieds
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editRepName, setEditRepName] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  // Treffen nachtragen (z.B. wenn am Treffen-Tag nichts erfasst wurde)
+  const [newMeetingDate, setNewMeetingDate] = useState("");
+  const [creatingMeeting, setCreatingMeeting] = useState(false);
 
   const updateMemberStatus = async (
-    attendanceId: string,
+    memberId: string,
     status: AttendanceStatus,
     representedBy?: string
   ) => {
+    if (!selectedMeeting) return;
     if (status === "REPRESENTED" && !representedBy?.trim()) {
       // Vertreter-Name erforderlich – Eingabefeld offen lassen
-      setEditingAttId(attendanceId);
+      setEditingMemberId(memberId);
       return;
     }
     setEditSaving(true);
     try {
+      // meeting_id + member_id: legt den Eintrag bei Bedarf neu an (Upsert)
       await adminFetch("/api/admin/attendance/member", pin, {
         method: "POST",
         body: JSON.stringify({
-          attendance_id: attendanceId,
+          meeting_id: selectedMeeting,
+          member_id: memberId,
           status,
           represented_by: representedBy ?? null,
         }),
       });
-      setEditingAttId(null);
+      setEditingMemberId(null);
       setEditRepName("");
-      if (selectedMeeting) await loadMeetingDetails(selectedMeeting);
+      await loadMeetingDetails(selectedMeeting);
       await loadMeetings();
     } catch (e) {
       alert("Speichern fehlgeschlagen: " + (e as Error).message);
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const createMeeting = async () => {
+    if (!newMeetingDate) return;
+    setCreatingMeeting(true);
+    try {
+      const meeting = await adminFetch<Meeting & { created: boolean }>(
+        "/api/admin/meetings",
+        pin,
+        { method: "POST", body: JSON.stringify({ date: newMeetingDate }) }
+      );
+      await loadMeetings();
+      await loadMeetingDetails(meeting.id);
+      if (!meeting.created) alert("Dieses Treffen existiert bereits und wurde geöffnet.");
+    } catch (e) {
+      alert("Treffen anlegen fehlgeschlagen: " + (e as Error).message);
+    } finally {
+      setCreatingMeeting(false);
     }
   };
 
@@ -963,18 +997,34 @@ function MeetingsTab({ pin }: { pin: string }) {
         .eq("key", "meeting_weekday")
         .single();
       const w = parseInt(data?.value ?? "5", 10);
-      if (!Number.isNaN(w) && w >= 0 && w <= 6) setMeetingWeekday(w);
+      const weekday = !Number.isNaN(w) && w >= 0 && w <= 6 ? w : 5;
+      setMeetingWeekday(weekday);
+      // Vorbelegung: Datum des letzten Treffens (am Treffen-Tag: heute)
+      setNewMeetingDate(lastMeetingDate(getBerlinTodayISO(), weekday));
     };
     loadWeekday();
+
+    const loadMembers = async () => {
+      const { data } = await supabase
+        .from("members")
+        .select("*")
+        .eq("active", true)
+        .order("name");
+      if (data) setActiveMembers(data);
+    };
+    loadMembers();
   }, []);
 
   const visibleMeetings = showAllDays
     ? meetings
     : meetings.filter((m) => getWeekday(m.date) === meetingWeekday);
 
+  // Alle aktiven Mitglieder plus vorhandene Einträge (nicht erfasste erscheinen leer)
+  const attendanceRows = buildAttendanceRows(activeMembers, attendances);
+
   const loadMeetingDetails = async (meetingId: string) => {
     setSelectedMeeting(meetingId);
-    setEditingAttId(null);
+    setEditingMemberId(null);
     setEditRepName("");
     const { data: attData } = await supabase
       .from("member_attendance")
@@ -1001,6 +1051,32 @@ function MeetingsTab({ pin }: { pin: string }) {
           />
           Auch andere Wochentage zeigen
         </label>
+      </div>
+
+      {/* Treffen nachtragen – für Tage, an denen am Kiosk nichts erfasst wurde */}
+      <div className="bg-white rounded-xl p-4 mb-4 flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[12rem]">
+          <label className="block text-sm font-medium text-gray-600 mb-1">
+            Treffen nachtragen
+          </label>
+          <input
+            type="date"
+            value={newMeetingDate}
+            onChange={(e) => setNewMeetingDate(e.target.value)}
+            className="w-full p-2 rounded-lg border border-gray-300 focus:border-bni-red focus:outline-none"
+          />
+        </div>
+        <button
+          onClick={createMeeting}
+          disabled={creatingMeeting || !newMeetingDate}
+          className="bg-bni-red text-white px-4 py-2 rounded-xl font-medium text-sm active:scale-95 transition-all disabled:opacity-40"
+        >
+          {creatingMeeting ? "Wird angelegt…" : "Treffen anlegen"}
+        </button>
+        <p className="w-full text-xs text-gray-500">
+          Legt ein Treffen für das gewählte Datum an. Danach kann die Anwesenheit aller
+          Mitglieder rechts über „Bearbeiten“ nachgetragen werden.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1048,11 +1124,13 @@ function MeetingsTab({ pin }: { pin: string }) {
               </button>
             </div>
             <div className="space-y-2">
-              {attendances.map((a) => (
+              {attendanceRows.map(({ member, attendance: a }) => (
                 <div
-                  key={a.id}
+                  key={member.id}
                   className={`p-3 rounded-lg ${
-                    a.status === "PRESENT"
+                    !a
+                      ? "bg-gray-50"
+                      : a.status === "PRESENT"
                       ? "bg-green-50"
                       : a.status === "LATE"
                       ? "bg-orange-50"
@@ -1064,33 +1142,34 @@ function MeetingsTab({ pin }: { pin: string }) {
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{a.member?.name}</span>
+                    <span className="font-medium">{member.name}</span>
                     <div className="flex items-center gap-2">
                       <span className="text-sm">
-                        {a.status === "PRESENT" &&
+                        {!a && <span className="text-gray-400">Nicht erfasst</span>}
+                        {a?.status === "PRESENT" &&
                           `Anwesend${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
-                        {a.status === "LATE" &&
+                        {a?.status === "LATE" &&
                           `Zu spät${formatBerlinTime(a.created_at) ? ` · ${formatBerlinTime(a.created_at)}` : ""}`}
-                        {a.status === "REPRESENTED" && `Vertreten: ${a.represented_by}`}
-                        {a.status === "MEDICAL_ABSENT" && "Medizinisch abwesend"}
-                        {a.status === "ABSENT" && "Abwesend"}
+                        {a?.status === "REPRESENTED" && `Vertreten: ${a.represented_by}`}
+                        {a?.status === "MEDICAL_ABSENT" && "Medizinisch abwesend"}
+                        {a?.status === "ABSENT" && "Abwesend"}
                       </span>
                       <button
                         onClick={() => {
-                          if (editingAttId === a.id) {
-                            setEditingAttId(null);
+                          if (editingMemberId === member.id) {
+                            setEditingMemberId(null);
                           } else {
-                            setEditingAttId(a.id);
-                            setEditRepName(a.represented_by ?? "");
+                            setEditingMemberId(member.id);
+                            setEditRepName(a?.represented_by ?? "");
                           }
                         }}
                         className="shrink-0 text-xs px-2 py-1 rounded-md bg-white/70 border border-gray-300 text-bni-gray active:scale-95"
                       >
-                        {editingAttId === a.id ? "Abbrechen" : "Bearbeiten"}
+                        {editingMemberId === member.id ? "Abbrechen" : "Bearbeiten"}
                       </button>
                     </div>
                   </div>
-                  {editingAttId === a.id && (
+                  {editingMemberId === member.id && (
                     <div className="mt-3 pt-3 border-t border-black/10">
                       <div className="flex flex-wrap gap-1.5">
                         {MEMBER_STATUS_OPTIONS.map((opt) => (
@@ -1102,10 +1181,10 @@ function MeetingsTab({ pin }: { pin: string }) {
                                 // Name-Eingabe abwarten, dann über Speichern bestätigen
                                 return;
                               }
-                              updateMemberStatus(a.id, opt.value);
+                              updateMemberStatus(member.id, opt.value);
                             }}
                             className={`text-xs px-3 py-2 rounded-lg font-medium active:scale-95 disabled:opacity-50 ${
-                              a.status === opt.value
+                              a?.status === opt.value
                                 ? "bg-bni-red text-white"
                                 : "bg-white border border-gray-300 text-bni-gray"
                             }`}
@@ -1124,7 +1203,7 @@ function MeetingsTab({ pin }: { pin: string }) {
                         />
                         <button
                           disabled={editSaving || !editRepName.trim()}
-                          onClick={() => updateMemberStatus(a.id, "REPRESENTED", editRepName)}
+                          onClick={() => updateMemberStatus(member.id, "REPRESENTED", editRepName)}
                           className="shrink-0 text-xs px-3 py-2 rounded-lg font-medium bg-yellow-500 text-white active:scale-95 disabled:opacity-40"
                         >
                           Als „Vertreten“ speichern

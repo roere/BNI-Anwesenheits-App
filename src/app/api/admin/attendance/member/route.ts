@@ -15,18 +15,21 @@ const ALLOWED_STATUS: AttendanceStatus[] = [
   "ABSENT",
 ];
 
-// Korrigiert nachträglich den Anwesenheits-Status eines Mitglieds für ein
-// (auch vergangenes) Treffen aus der Admin-Übersicht heraus.
+// Setzt oder korrigiert nachträglich den Anwesenheits-Status eines Mitglieds
+// für ein (auch vergangenes) Treffen aus der Admin-Übersicht heraus.
+// Entweder attendance_id (bestehender Eintrag) oder meeting_id + member_id
+// (Eintrag wird bei Bedarf neu angelegt) angeben.
 export async function POST(req: NextRequest) {
   if (!verifyPin(req)) {
     return NextResponse.json({ error: "Nicht autorisiert" }, { status: 401 });
   }
 
-  const { attendance_id, status, represented_by } = await req.json();
+  const { attendance_id, meeting_id, member_id, status, represented_by } =
+    await req.json();
 
-  if (!attendance_id || !status) {
+  if (!status || (!attendance_id && !(meeting_id && member_id))) {
     return NextResponse.json(
-      { error: "attendance_id und status sind erforderlich" },
+      { error: "status sowie attendance_id oder meeting_id + member_id sind erforderlich" },
       { status: 400 }
     );
   }
@@ -41,16 +44,19 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("member_attendance")
-    .update({
-      status,
-      // Vertreter-Name nur bei REPRESENTED behalten, sonst leeren
-      represented_by: status === "REPRESENTED" ? represented_by.trim() : null,
-    })
-    .eq("id", attendance_id)
-    .select()
-    .single();
+  const fields = {
+    status,
+    // Vertreter-Name nur bei REPRESENTED behalten, sonst leeren
+    represented_by: status === "REPRESENTED" ? represented_by.trim() : null,
+  };
+
+  const query = attendance_id
+    ? supabase.from("member_attendance").update(fields).eq("id", attendance_id)
+    : supabase
+        .from("member_attendance")
+        .upsert({ meeting_id, member_id, ...fields }, { onConflict: "meeting_id,member_id" });
+
+  const { data, error } = await query.select().single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
