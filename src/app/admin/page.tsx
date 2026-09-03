@@ -11,6 +11,7 @@ import {
   WEEKDAY_NAMES,
 } from "@/lib/time";
 import { buildAttendanceRows } from "@/lib/attendance-rows";
+import { isGuestCheckedIn } from "@/lib/guest-status";
 import { matchMemberId } from "@/lib/match-member";
 import type {
   Member,
@@ -784,6 +785,66 @@ function MeetingsTab({ pin }: { pin: string }) {
     if (selectedMeeting) loadMeetingDetails(selectedMeeting);
   };
 
+  // Gäste nachträglich als anwesend eintragen / zurücknehmen / entfernen
+  const [newGuestName, setNewGuestName] = useState("");
+  const [newGuestFirma, setNewGuestFirma] = useState("");
+  const [guestSaving, setGuestSaving] = useState(false);
+
+  const addGuest = async () => {
+    if (!selectedMeeting || !newGuestName.trim()) return;
+    setGuestSaving(true);
+    try {
+      await adminFetch("/api/admin/guests/attendance", pin, {
+        method: "POST",
+        body: JSON.stringify({
+          meeting_id: selectedMeeting,
+          name: newGuestName,
+          firma: newGuestFirma,
+        }),
+      });
+      setNewGuestName("");
+      setNewGuestFirma("");
+      await loadMeetingDetails(selectedMeeting);
+      await loadMeetings();
+    } catch (e) {
+      alert("Gast eintragen fehlgeschlagen: " + (e as Error).message);
+    } finally {
+      setGuestSaving(false);
+    }
+  };
+
+  const setGuestCheckedIn = async (attendanceId: string, checkedIn: boolean) => {
+    setGuestSaving(true);
+    try {
+      await adminFetch("/api/admin/guests/attendance", pin, {
+        method: "PATCH",
+        body: JSON.stringify({ attendance_id: attendanceId, admin_checked_in: checkedIn }),
+      });
+      if (selectedMeeting) await loadMeetingDetails(selectedMeeting);
+    } catch (e) {
+      alert("Speichern fehlgeschlagen: " + (e as Error).message);
+    } finally {
+      setGuestSaving(false);
+    }
+  };
+
+  const removeGuest = async (attendanceId: string, name: string) => {
+    if (!confirm(`${name} aus diesem Treffen entfernen?`)) return;
+    setGuestSaving(true);
+    try {
+      await adminFetch("/api/admin/guests/attendance", pin, {
+        method: "DELETE",
+        body: JSON.stringify({ attendance_id: attendanceId }),
+      });
+      if (selectedMeeting) await loadMeetingDetails(selectedMeeting);
+      await loadMeetings();
+    } catch (e) {
+      alert("Entfernen fehlgeschlagen: " + (e as Error).message);
+    } finally {
+      setGuestSaving(false);
+    }
+  };
+
   const exportPDF = async () => {
     const meeting = meetings.find((m) => m.id === selectedMeeting);
     if (!meeting) return;
@@ -814,7 +875,7 @@ function MeetingsTab({ pin }: { pin: string }) {
     doc.text(dateStr, 14, 36);
 
     // Zusammenfassung
-    const checkedInGuests = guestAttendances.filter((ga) => ga.signature_data);
+    const checkedInGuests = guestAttendances.filter(isGuestCheckedIn);
     const totalCheckedIn =
       present.length + late.length + represented.length + checkedInGuests.length;
 
@@ -898,7 +959,13 @@ function MeetingsTab({ pin }: { pin: string }) {
     const guestRows = guestAttendances.map((ga) => ({
       name: ga.guest?.name || "",
       firma: ga.guest?.firma || "",
-      status: ga.signature_data ? "Eingecheckt" : "Nicht eingecheckt",
+      status: ga.signature_data
+        ? "Eingecheckt"
+        : ga.admin_checked_in
+        ? "Eingecheckt (nachgetragen)"
+        : ga.absent
+        ? "Abwesend"
+        : "Nicht eingecheckt",
       isVertretung: false,
     }));
     const allGuests = [...guestRows, ...vertretungen];
@@ -1026,6 +1093,8 @@ function MeetingsTab({ pin }: { pin: string }) {
     setSelectedMeeting(meetingId);
     setEditingMemberId(null);
     setEditRepName("");
+    setNewGuestName("");
+    setNewGuestFirma("");
     const { data: attData } = await supabase
       .from("member_attendance")
       .select("*, member:members(*)")
@@ -1213,16 +1282,17 @@ function MeetingsTab({ pin }: { pin: string }) {
                   )}
                 </div>
               ))}
-              {guestAttendances.length > 0 && (
-                <>
-                  <h4 className="font-bold mt-4">Gäste</h4>
-                  {guestAttendances.map((ga) => (
+              <h4 className="font-bold mt-4">Gäste</h4>
+              {guestAttendances.length === 0 && (
+                <p className="text-sm text-gray-500">Keine Gäste eingetragen.</p>
+              )}
+              {guestAttendances.map((ga) => (
                     <div
                       key={ga.id}
                       className={`p-3 rounded-lg flex items-center justify-between gap-3 ${
                         ga.absent
                           ? "bg-red-50"
-                          : ga.signature_data
+                          : isGuestCheckedIn(ga)
                           ? "bg-green-50"
                           : "bg-blue-50"
                       }`}
@@ -1239,25 +1309,88 @@ function MeetingsTab({ pin }: { pin: string }) {
                             ? "Abwesend"
                             : ga.signature_data
                             ? "Eingecheckt"
+                            : ga.admin_checked_in
+                            ? "Eingecheckt (nachgetragen)"
                             : "Noch nicht eingecheckt"}
                         </span>
                       </div>
                       {!ga.signature_data && (
-                        <button
-                          onClick={() => toggleGuestAbsent(ga.id, !ga.absent)}
-                          className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium ${
-                            ga.absent
-                              ? "bg-gray-200 text-bni-gray"
-                              : "bg-red-500 text-white"
-                          }`}
-                        >
-                          {ga.absent ? "Abwesend aufheben" : "Abwesend"}
-                        </button>
+                        <div className="shrink-0 flex flex-wrap gap-1.5 justify-end">
+                          {ga.admin_checked_in ? (
+                            <button
+                              disabled={guestSaving}
+                              onClick={() => setGuestCheckedIn(ga.id, false)}
+                              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-200 text-bni-gray disabled:opacity-50"
+                            >
+                              Anwesend zurücknehmen
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                disabled={guestSaving}
+                                onClick={() => setGuestCheckedIn(ga.id, true)}
+                                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 text-white disabled:opacity-50"
+                              >
+                                Anwesend
+                              </button>
+                              <button
+                                disabled={guestSaving}
+                                onClick={() => toggleGuestAbsent(ga.id, !ga.absent)}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50 ${
+                                  ga.absent
+                                    ? "bg-gray-200 text-bni-gray"
+                                    : "bg-red-500 text-white"
+                                }`}
+                              >
+                                {ga.absent ? "Abwesend aufheben" : "Abwesend"}
+                              </button>
+                            </>
+                          )}
+                          <button
+                            disabled={guestSaving}
+                            onClick={() => removeGuest(ga.id, ga.guest?.name ?? "Gast")}
+                            className="px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-gray-300 text-bni-gray disabled:opacity-50"
+                          >
+                            Entfernen
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
-                </>
-              )}
+
+              {/* Gast nachtragen (z.B. für vergangene Treffen) */}
+              <div className="mt-3 p-3 rounded-lg border border-dashed border-gray-300">
+                <p className="text-sm font-medium text-gray-600 mb-2">Gast nachtragen</p>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    value={newGuestName}
+                    onChange={(e) => setNewGuestName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addGuest()}
+                    placeholder="Name"
+                    className="flex-1 min-w-[10rem] text-sm p-2 rounded-lg border border-gray-300 focus:border-bni-red focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={newGuestFirma}
+                    onChange={(e) => setNewGuestFirma(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addGuest()}
+                    placeholder="Firma (optional)"
+                    className="flex-1 min-w-[10rem] text-sm p-2 rounded-lg border border-gray-300 focus:border-bni-red focus:outline-none"
+                  />
+                  <button
+                    disabled={guestSaving || !newGuestName.trim()}
+                    onClick={addGuest}
+                    className="text-sm px-3 py-2 rounded-lg font-medium bg-bni-red text-white active:scale-95 disabled:opacity-40"
+                  >
+                    Als anwesend eintragen
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Bekannte Gäste werden über den Namen wiedererkannt, neue Namen werden als Gast
+                  angelegt. Der Besuchszähler wird mitgezählt.
+                </p>
+              </div>
             </div>
           </div>
         )}

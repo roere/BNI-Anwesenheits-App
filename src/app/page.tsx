@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { kioskFetch, getKioskToken } from "@/lib/kiosk-api";
+import { isGuestCheckedIn } from "@/lib/guest-status";
 import {
   getBerlinMinutesNow,
   parseTimeToMinutes,
@@ -640,7 +641,7 @@ export default function CheckInPage() {
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-bni-gray">
-              Gäste ({guestAttendances.filter((ga) => ga.signature_data).length}/
+              Gäste ({guestAttendances.filter(isGuestCheckedIn).length}/
               {guestAttendances.filter((ga) => !ga.absent).length})
             </h2>
             {canWrite && (
@@ -656,7 +657,7 @@ export default function CheckInPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4">
               {/* Ausstehende Gäste (vorausgefüllt, noch nicht eingecheckt) */}
               {guestAttendances
-                .filter((ga) => !ga.signature_data && !ga.absent)
+                .filter((ga) => !isGuestCheckedIn(ga) && !ga.absent)
                 .map((ga) => (
                   <button
                     key={ga.id}
@@ -677,7 +678,7 @@ export default function CheckInPage() {
                 ))}
               {/* Abwesende Gäste */}
               {guestAttendances
-                .filter((ga) => ga.absent && !ga.signature_data)
+                .filter((ga) => ga.absent && !isGuestCheckedIn(ga))
                 .map((ga) => (
                   <button
                     key={ga.id}
@@ -696,7 +697,7 @@ export default function CheckInPage() {
                 ))}
               {/* Eingecheckte Gäste */}
               {guestAttendances
-                .filter((ga) => ga.signature_data)
+                .filter(isGuestCheckedIn)
                 .map((ga) => (
                   <div
                     key={ga.id}

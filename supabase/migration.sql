@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS guest_attendance (
   signature_data TEXT,
   breakfast_paid BOOLEAN NOT NULL DEFAULT false,
   absent BOOLEAN NOT NULL DEFAULT false,
+  admin_checked_in BOOLEAN NOT NULL DEFAULT false,
   disclaimer_accepted BOOLEAN NOT NULL DEFAULT false,
   disclaimer_accepted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now(),

@@ -46,6 +46,8 @@ export interface GuestAttendance {
   signature_data: string | null;
   breakfast_paid: boolean;
   absent: boolean;
+  // Im Admin nachträglich als anwesend eingetragen (ohne Unterschrift am Kiosk)
+  admin_checked_in: boolean;
   disclaimer_accepted: boolean;
   disclaimer_accepted_at: string | null;
   created_at: string;
